@@ -89,14 +89,18 @@ h2{font-size:15px;margin:22px 0 8px;color:var(--muted);font-weight:600;text-tran
 #modal{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.35);display:flex;align-items:flex-end;justify-content:center}
 .sheet{background:var(--bg);width:100%;max-width:640px;height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .small-sheet{height:auto;border-radius:18px 18px 0 0;padding-bottom:var(--safe-b)}
+label.btn{color:var(--ink);font-size:16px;cursor:pointer}
+label.btn:not(.ghost){color:var(--acc-ink)}
+.post{margin:6px 0;word-break:break-word}.post a{color:var(--acc)}
+.nav button{font-size:11px}
 #update{position:fixed;left:12px;right:12px;bottom:calc(80px + var(--safe-b));z-index:30;background:var(--ink);color:var(--bg);padding:12px 14px;border-radius:12px;display:none;text-align:center;font-weight:600}
 </style>
 </head>
 <body>
 <div id="app"></div>
 <button id="update">🔄 Nuova versione disponibile · tocca per aggiornare</button>
-<script>window.APP_VERSION = '202611261840';</script>
-<script type="module" src="app.js?v=202611261840"></script>
+<script>window.APP_VERSION = '202611261852';</script>
+<script type="module" src="app.js?v=202611261852"></script>
 <script>
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').then(function (reg) {

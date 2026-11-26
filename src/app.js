@@ -33,7 +33,7 @@ const saveLocal = () => localStorage.setItem(LS, JSON.stringify(local));
 
 const S = {
   db: null, view: 'home', tab: 'spese',
-  tripId: null, trip: null, expenses: [], stages: [], unsub: [],
+  tripId: null, trip: null, expenses: [], stages: [], posts: [], gpx: [], unsub: [], postDraft: '',
   pending: 0, online: navigator.onLine, modal: null, form: null, joinCode: '', joinTrip: null, msg: '',
 };
 
@@ -42,6 +42,9 @@ const members = () => S.trip?.members || [];
 const nameOf = (id) => members().find((m) => m.id === id)?.name || '?';
 const myName = () => nameOf(me());
 const rate = () => Number(S.trip?.rate) || 10.8;
+// Il creatore del viaggio (per i viaggi vecchi: il primo partecipante).
+const ownerId = () => S.trip?.ownerId || members()[0]?.id;
+const isOwner = () => !!me() && me() === ownerId();
 
 // ---------- avvio ----------
 export async function start(db) {
@@ -72,7 +75,7 @@ export async function start(db) {
 
 function openTrip(id) {
   S.unsub.forEach((f) => f());
-  S.tripId = id; S.view = 'trip'; S.trip = null; S.expenses = []; S.stages = [];
+  S.tripId = id; S.view = 'trip'; S.trip = null; S.expenses = []; S.stages = []; S.posts = []; S.gpx = [];
   local.current = id; saveLocal();
   S.unsub = [
     S.db.watchTrip(id, (t) => {
@@ -83,6 +86,8 @@ function openTrip(id) {
     }),
     S.db.watchColl(id, 'expenses', (items) => { S.expenses = items; render(); }),
     S.db.watchColl(id, 'stages', (items) => { S.stages = items; render(); }),
+    S.db.watchColl(id, 'posts', (items) => { S.posts = items; render(); }),
+    S.db.watchColl(id, 'gpx', (items) => { S.gpx = items; render(); }),
   ];
 }
 
@@ -119,7 +124,9 @@ function viewHome() {
       <div class="stack">
         <button class="btn" data-a="go-create">＋ Crea un viaggio</button>
         <button class="btn ghost" data-a="go-join">Entra con un codice</button>
+        <label class="btn ghost">♻️ Ripristina da un backup<input type="file" id="restoreFile" hidden></label>
       </div>
+      ${S.msg ? `<p class="err">${esc(S.msg)}</p>` : ''}
     </main>`;
 }
 
@@ -161,8 +168,14 @@ function viewJoin() {
 }
 
 function viewTrip() {
-  const tabs = [['spese', '💶', 'Spese'], ['saldi', '⚖️', 'Saldi'], ['tappe', '🏍️', 'Tappe'], ['viaggio', '⚙️', 'Viaggio']];
-  const body = { spese: tabSpese, saldi: tabSaldi, tappe: tabTappe, viaggio: tabViaggio }[S.tab]();
+  if (S.trip.deleted) {
+    return `<header class="top"><button class="back" data-a="home">‹</button><h1>${esc(S.trip.name)}</h1></header>
+      <main class="pad center"><p><b>Questo viaggio è stato eliminato.</b></p>
+      <p class="muted">Chi l'ha creato può ripristinarlo da un backup.</p>
+      <button class="btn" data-a="forget">Togli dalla mia lista</button></main>`;
+  }
+  const tabs = [['spese', '💶', 'Spese'], ['saldi', '⚖️', 'Saldi'], ['tappe', '🏍️', 'Tappe'], ['bacheca', '📌', 'Bacheca'], ['viaggio', '⚙️', 'Viaggio']];
+  const body = { spese: tabSpese, saldi: tabSaldi, tappe: tabTappe, bacheca: tabBacheca, viaggio: tabViaggio }[S.tab]();
   return `
     <header class="top">
       <button class="back" data-a="home" aria-label="Tutti i viaggi">‹</button>
@@ -266,7 +279,78 @@ function tabTappe() {
     </div>
     ${kmPlan ? `<p class="muted small">Tappe previste ancora da fare: ${kmPlan.toLocaleString('it-IT')} km</p>` : ''}
     <div class="row gap"><button class="btn" data-a="new-stage">＋ Tappa</button><button class="btn ghost" data-a="new-stage" data-plan="1">📝 Tappa prevista</button></div>
-    ${list || '<p class="muted center">Nessuna tappa ancora.</p>'}`;
+    ${list || '<p class="muted center">Nessuna tappa ancora.</p>'}
+    ${gpxSection()}`;
+}
+
+// ---------- file GPX ----------
+function gpxSection() {
+  const items = [...S.gpx].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return `
+    <h2>File GPX</h2>
+    <label class="btn ghost">📁 Carica un file GPX<input type="file" id="gpxFile" hidden></label>
+    ${S.msg && S.tab === 'tappe' ? `<p class="err">${esc(S.msg)}</p>` : ''}
+    ${items.map((g) => `<div class="card">
+      <div class="row"><div class="title">🗺️ ${esc(g.name)}</div><div class="amt">${g.km ? `${g.km} km` : ''}</div></div>
+      <div class="muted small">${g.points || 0} punti${g.wpts ? ` · ${g.wpts} ${g.wpts === 1 ? 'sosta' : 'soste'}` : ''}${g.simplified ? ' · alleggerito' : ''} · caricato da ${esc(g.uploadedBy || '?')}${g._pending ? ' · ⏳' : ''}</div>
+      <div class="row gap"><button class="pill" data-a="gpx-dl" data-id="${g.id}">⬇️ Scarica / apri</button><button class="pill" data-a="gpx-del" data-id="${g.id}">Elimina</button></div>
+    </div>`).join('')}
+    ${items.length ? '<p class="muted small">"Scarica / apri" ti fa scegliere l\'app: OsmAnd, un navigatore da moto o Salva sul telefono.</p>' : '<p class="muted small">Carica le tracce delle tappe: tutti le avranno sul telefono, anche senza rete.</p>'}`;
+}
+
+const hav = (a, b) => {
+  const R = 6371, r = (x) => (x * Math.PI) / 180;
+  const dLat = r(b[0] - a[0]), dLon = r(b[1] - a[1]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a[0])) * Math.cos(r(b[0])) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+
+async function uploadGpx(file) {
+  S.msg = '';
+  const text = await file.text();
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (!/<gpx[\s>]/i.test(text) || doc.querySelector('parsererror')) { S.msg = 'Questo file non sembra un GPX.'; render(); return; }
+  const pts = [...doc.querySelectorAll('trkpt, rtept')].map((n) => [parseFloat(n.getAttribute('lat')), parseFloat(n.getAttribute('lon'))]).filter((p) => p.every(Number.isFinite));
+  const wpts = doc.querySelectorAll('wpt').length;
+  let km = 0;
+  for (let i = 1; i < pts.length; i++) km += hav(pts[i - 1], pts[i]);
+  let out = text, simplified = false;
+  const LIMIT = 900000; // un documento Firestore regge circa 1 MB
+  if (text.length > LIMIT) {
+    simplified = true;
+    const wptXml = [...doc.querySelectorAll('wpt')].map((n) => new XMLSerializer().serializeToString(n)).join('\n');
+    let step = 1, body = '';
+    do {
+      step += 1;
+      const keep = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+      body = keep.map((p) => `<trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"/>`).join('');
+      out = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Viaggi in Moto" xmlns="http://www.topografix.com/GPX/1/1">${wptXml}<trk><name>${esc(file.name)}</name><trkseg>${body}</trkseg></trk></gpx>`;
+    } while (out.length > LIMIT && step < 200);
+    if (out.length > LIMIT) { S.msg = 'File troppo grande anche alleggerito: dividilo in più tappe.'; render(); return; }
+  }
+  S.db.saveItem(S.tripId, 'gpx', {
+    id: rid(16), name: file.name.replace(/\.gpx$/i, ''), text: out, km: Math.round(km), points: pts.length, wpts, simplified,
+    uploadedBy: myName(), createdAt: Date.now(),
+  });
+  render();
+}
+
+// ---------- scheda Bacheca ----------
+const linkify = (t) => esc(t).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>').replace(/\n/g, '<br>');
+const when = (ms) => new Date(ms).toLocaleString('it-IT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+function tabBacheca() {
+  const posts = [...S.posts].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  return `
+    <div class="card">
+      <textarea data-p="1" rows="3" placeholder="Scrivi un aggiornamento: traghetto prenotato, campeggio confermato, link utili…">${esc(S.postDraft)}</textarea>
+      <button class="btn" data-a="post-send">Pubblica</button>
+    </div>
+    ${posts.map((p) => `<div class="card">
+      <div class="row"><b>${esc(p.author)}</b><span class="muted small">${when(p.createdAt)}${p._pending ? ' · ⏳' : ''}</span></div>
+      <div class="post">${linkify(p.text)}</div>
+      ${p.author === myName() ? `<button class="link small" data-a="post-del" data-id="${p.id}">Elimina</button>` : ''}
+    </div>`).join('') || '<p class="muted center">Ancora nessun aggiornamento.</p>'}`;
 }
 
 // ---------- scheda Viaggio ----------
@@ -295,6 +379,12 @@ function tabViaggio() {
       <button class="btn ghost" data-a="export-json">💾 Esporta backup completo</button>
       <button class="btn ghost" data-a="export-csv">📊 Esporta spese (per Excel)</button>
     </div>
+    <h2>Lista viaggi</h2>
+    <div class="card stack">
+      <p class="small muted">Nasconde il viaggio solo da questo telefono. Per gli altri resta com'è e puoi rientrare con il link.</p>
+      <button class="btn ghost" data-a="forget">Togli dalla mia lista</button>
+      ${isOwner() ? '<button class="btn danger" data-a="ask-del-trip">🗑️ Elimina viaggio per tutti</button><p class="small muted">Questo pulsante lo vedi solo tu, che hai creato il viaggio.</p>' : ''}
+    </div>
     <p class="muted small center">Versione ${window.APP_VERSION || ''}</p>`;
 }
 
@@ -304,7 +394,7 @@ function renderModal() {
   if (!S.modal) { if (el) el.remove(); document.body.classList.remove('lock'); return; }
   if (!el) { el = document.createElement('div'); el.id = 'modal'; document.body.appendChild(el); }
   document.body.classList.add('lock');
-  el.innerHTML = { expense: modalExpense, transfer: modalTransfer, stage: modalStage, saved: modalSaved }[S.modal]();
+  el.innerHTML = { expense: modalExpense, transfer: modalTransfer, stage: modalStage, saved: modalSaved, deltrip: modalDelTrip }[S.modal]();
   if (S.modal === 'expense') updatePreview();
 }
 
@@ -429,6 +519,18 @@ function modalStage() {
     </main></div>`;
 }
 
+function modalDelTrip() {
+  return `<div class="sheet small-sheet"><main class="pad">
+    <h2>🗑️ Eliminare "${esc(S.trip.name)}"?</h2>
+    <p>Spariscono <b>per tutti e tre</b> spese, tappe, bacheca e file GPX. Si può recuperare solo da un backup.</p>
+    <button class="btn ghost" data-a="export-json">💾 Prima salva il backup</button>
+    <label>Per confermare scrivi il nome del viaggio<input data-e="confirm" placeholder="${esc(S.trip.name)}" autocomplete="off"></label>
+    <p id="experr" class="err"></p>
+    <button class="btn danger" data-a="del-trip">Elimina definitivamente</button>
+    <button class="btn ghost" data-a="close">Annulla</button>
+  </main></div>`;
+}
+
 function modalSaved() {
   const { exp } = S.form;
   const eff = expenseEffect(exp, rate());
@@ -454,6 +556,14 @@ function modalSaved() {
 // ---------- eventi ----------
 function onInput(ev) {
   const t = ev.target;
+  if (t.type === 'file') {
+    if (ev.type !== 'change' || !t.files?.[0]) return;
+    const file = t.files[0]; t.value = '';
+    if (t.id === 'restoreFile') restoreBackup(file);
+    if (t.id === 'gpxFile') uploadGpx(file);
+    return;
+  }
+  if (t.dataset.p !== undefined) { S.postDraft = t.value; return; }
   if (t.dataset.f !== undefined) {
     const k = t.dataset.f;
     if (k === 'joinCode') { S.joinCode = t.value; return; }
@@ -494,7 +604,7 @@ async function onClick(ev) {
       const ms = []; let meId = null;
       people.forEach((p, i) => { if (p) { const m = { id: rid(6), name: p }; ms.push(m); if (i === f.meIdx) meId = m.id; } });
       const tid = rid(20);
-      await S.db.createTrip(tid, { name: f.name.trim(), members: ms, rate: parseFloat(String(f.rate).replace(',', '.')) || 10.8, createdAt: Date.now() });
+      await S.db.createTrip(tid, { name: f.name.trim(), members: ms, ownerId: meId, rate: parseFloat(String(f.rate).replace(',', '.')) || 10.8, createdAt: Date.now() });
       local.trips.push({ id: tid, name: f.name.trim(), me: meId, meName: people[f.meIdx] }); saveLocal();
       S.form = null; S.tab = 'viaggio'; openTrip(tid); render(); break;
     }
@@ -607,7 +717,30 @@ async function onClick(ev) {
       if (n && n.trim()) S.db.updateTrip(S.tripId, { members: [...members(), { id: rid(6), name: n.trim() }] });
       break;
     }
-    case 'export-json': download(`${S.trip.name}-backup.json`, JSON.stringify({ trip: S.trip, expenses: S.expenses, stages: S.stages }, null, 2), 'application/json'); break;
+    case 'export-json': exportBackup(); break;
+    case 'forget':
+      local.trips = local.trips.filter((x) => x.id !== S.tripId);
+      S.unsub.forEach((x) => x()); S.unsub = []; local.current = null; saveLocal();
+      S.view = 'home'; S.modal = null; S.form = null; render(); break;
+    case 'ask-del-trip': S.form = { confirm: '' }; S.modal = 'deltrip'; renderModal(); break;
+    case 'del-trip': {
+      if ((f.confirm || '').trim().toLowerCase() !== S.trip.name.trim().toLowerCase()) { $('#experr').textContent = 'Il nome non corrisponde.'; return; }
+      const id = S.tripId;
+      [['expenses', S.expenses], ['stages', S.stages], ['posts', S.posts], ['gpx', S.gpx]].forEach(([c, items]) => items.forEach((x) => S.db.deleteItem(id, c, x.id)));
+      S.db.updateTrip(id, { deleted: true, deletedAt: Date.now() });
+      local.trips = local.trips.filter((x) => x.id !== id);
+      S.unsub.forEach((x) => x()); S.unsub = []; local.current = null; saveLocal();
+      S.view = 'home'; S.modal = null; S.form = null; render(); break;
+    }
+    case 'post-send': {
+      const text = S.postDraft.trim();
+      if (!text) return;
+      S.db.saveItem(S.tripId, 'posts', { id: rid(16), text, author: myName(), createdAt: Date.now() });
+      S.postDraft = ''; render(); break;
+    }
+    case 'post-del': if (confirm('Eliminare il messaggio?')) S.db.deleteItem(S.tripId, 'posts', id); break;
+    case 'gpx-dl': { const g = S.gpx.find((x) => x.id === id); download(`${g.name}.gpx`, g.text, 'application/gpx+xml'); break; }
+    case 'gpx-del': if (confirm('Eliminare il file GPX per tutti?')) S.db.deleteItem(S.tripId, 'gpx', id); break;
     case 'export-csv': download(`${S.trip.name}-spese.csv`, expensesCsv(), 'text/csv'); break;
     default: break;
   }
@@ -627,6 +760,31 @@ async function lookupTrip() {
     S.msg = 'Non riesco a collegarmi. Serve internet per entrare la prima volta.';
   }
   render();
+}
+
+function exportBackup() {
+  const data = {
+    app: 'viaggi-moto', version: 1, savedAt: new Date().toISOString(), tripId: S.tripId,
+    trip: S.trip, expenses: S.expenses, stages: S.stages, posts: S.posts, gpx: S.gpx,
+  };
+  const clean = (o) => JSON.parse(JSON.stringify(o, (k, v) => (k === '_pending' ? undefined : v)));
+  download(`${S.trip.name}-backup.json`, JSON.stringify(clean(data), null, 1), 'application/json');
+}
+
+async function restoreBackup(file) {
+  S.msg = '';
+  let data;
+  try { data = JSON.parse(await file.text()); } catch { data = null; }
+  if (!data || !data.trip || !Array.isArray(data.expenses)) { S.msg = 'Questo file non è un backup dell\'app.'; render(); return; }
+  // Se il viaggio originale esiste ancora (e non è eliminato), ne facciamo una copia con un codice nuovo.
+  let id = data.tripId, name = data.trip.name;
+  let existing = null;
+  if (id) { try { existing = await S.db.getTrip(id); } catch { existing = { unknown: true }; } }
+  if (!id || (existing && !existing.deleted)) { id = rid(20); if (existing) name = `${name} (copia)`; }
+  const { deleted, deletedAt, ...trip } = data.trip;
+  await S.db.createTrip(id, { ...trip, name, deleted: false, restoredAt: Date.now() });
+  ['expenses', 'stages', 'posts', 'gpx'].forEach((c) => (data[c] || []).forEach((x) => S.db.saveItem(id, c, x)));
+  S.joinCode = id; S.joinTrip = { ...trip, name }; S.view = 'join'; render();
 }
 
 function expensesCsv() {
