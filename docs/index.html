@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Viaggi in Moto</title>
+<meta name="theme-color" content="#c4572e">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Viaggi Moto">
+<style>
+:root{
+  --bg:#f6efe4;--card:#fffaf2;--ink:#2b2118;--muted:#8a7a68;--line:#e7dccb;
+  --acc:#c4572e;--acc-ink:#fff;--pos:#2f7d4f;--neg:#b3392b;--soft:#efe3d0;
+  --r:14px;--safe-b:env(safe-area-inset-bottom);
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#1c1713;--card:#28211b;--ink:#f3ebe0;--muted:#a8998a;--line:#3a3028;
+  --acc:#e0703f;--pos:#6cc38f;--neg:#ff8a7a;--soft:#342a22;}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+body.lock{overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-align:left}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px 12px;width:100%;margin-top:4px;min-width:0}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--acc);border-color:transparent}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0}
+label input,label select,label textarea{font-size:16px}
+h1{font-size:19px;margin:0;line-height:1.2}
+h2{font-size:15px;margin:22px 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:var(--bg);border-bottom:1px solid var(--line)}
+.back{font-size:26px;line-height:1;padding:2px 8px 4px 0;color:var(--acc)}
+.save{margin-left:auto;background:var(--acc);color:var(--acc-ink);padding:8px 16px;border-radius:999px;font-weight:600}
+.grow{flex:1;min-width:0}
+.pad{padding:12px 14px 30px;max-width:640px;margin:0 auto}
+.with-nav{padding-bottom:calc(90px + var(--safe-b))}
+.card{display:block;width:100%;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;margin:8px 0}
+.card.planned{border-style:dashed;opacity:.85}
+.plain{display:block;width:100%}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.row.gap{gap:10px;justify-content:flex-start}
+.row.gap>.btn{flex:1}
+.line{padding:6px 0;border-bottom:1px solid var(--line)}
+.line:last-child{border-bottom:0}
+.line>span:nth-child(2){flex:1;text-align:right}
+.line>span:nth-child(3){min-width:84px;text-align:right}
+.title{font-weight:600}
+.amt{font-weight:700;text-align:right;white-space:nowrap}
+.big{font-size:24px;font-weight:700}
+.muted{color:var(--muted)}.small{font-size:13px}
+.center{text-align:center;padding:30px 10px}
+.pos{color:var(--pos)}.neg{color:var(--neg)}
+.err{color:var(--neg);font-size:14px;min-height:1em}
+.btn{display:block;width:100%;text-align:center;background:var(--acc);color:var(--acc-ink);padding:13px;border-radius:12px;font-weight:600;margin:8px 0}
+.btn.ghost{background:var(--soft);color:var(--ink)}
+.btn.danger{background:transparent;color:var(--neg);border:1px solid var(--neg);margin-top:24px}
+.link{color:var(--acc);padding:10px 0;font-weight:600}
+.stack>*{margin:8px 0}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{font-size:12.5px;padding:3px 9px;border-radius:999px;background:var(--soft)}
+.chip.pos{color:var(--pos)}.chip.neg{color:var(--neg)}
+.pill{padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:15px;white-space:nowrap}
+.pill.on{background:var(--acc);border-color:var(--acc);color:var(--acc-ink)}
+.pill.maps{margin-top:8px;font-size:14px}
+.seg{display:flex;background:var(--soft);border-radius:10px;padding:3px;margin-top:18px}
+.seg button{padding:8px 14px;border-radius:8px;font-weight:600;text-align:center}
+.seg button.on{background:var(--card);box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.seg.wide{margin:6px 0 4px}.seg.wide button{flex:1}
+.lbl{font-size:13px;color:var(--muted);margin:14px 0 2px}
+.line-card{background:var(--soft)}
+.line-card .pill{background:var(--card)}.line-card .pill.on{background:var(--acc)}
+.preview{border-color:var(--acc)}
+.summary{display:flex;justify-content:space-between;align-items:flex-end;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin:6px 0 10px}
+.summary.three>div{flex:1;text-align:center}
+.right{text-align:right}
+.day{font-size:13px;color:var(--muted);margin:18px 2px 0;text-transform:capitalize}
+.chev{font-size:24px;color:var(--muted)}
+.code{font:13px ui-monospace,Menlo,monospace;background:var(--soft);padding:10px;border-radius:8px;word-break:break-all;margin:8px 0}
+.sync{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot.ok{background:var(--pos)}.dot.wait{background:#e0a22f}.dot.off{background:var(--muted)}
+.nav{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;background:var(--card);border-top:1px solid var(--line);padding:6px 4px calc(6px + var(--safe-b))}
+.nav button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:12px;color:var(--muted);padding:4px 0}
+.nav button span{font-size:21px;filter:grayscale(1);opacity:.7}
+.nav button.on{color:var(--acc);font-weight:600}.nav button.on span{filter:none;opacity:1}
+#modal{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.35);display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--bg);width:100%;max-width:640px;height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.small-sheet{height:auto;border-radius:18px 18px 0 0;padding-bottom:var(--safe-b)}
+#update{position:fixed;left:12px;right:12px;bottom:calc(80px + var(--safe-b));z-index:30;background:var(--ink);color:var(--bg);padding:12px 14px;border-radius:12px;display:none;text-align:center;font-weight:600}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<button id="update">🔄 Nuova versione disponibile · tocca per aggiornare</button>
+<script>window.APP_VERSION = '202611261816';</script>
+<script type="module" src="app.js?v=202611261816"></script>
+<script>
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  navigator.serviceWorker.register('sw.js').then(function (reg) {
+    function show(w) {
+      var b = document.getElementById('update');
+      b.style.display = 'block';
+      b.onclick = function () { w.postMessage('skip'); };
+    }
+    if (reg.waiting && navigator.serviceWorker.controller) show(reg.waiting);
+    reg.addEventListener('updatefound', function () {
+      var w = reg.installing;
+      w.addEventListener('statechange', function () {
+        if (w.state === 'installed' && navigator.serviceWorker.controller) show(w);
+      });
+    });
+    setInterval(function () { reg.update(); }, 30 * 60 * 1000);
+  });
+  var reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', function () {
+    if (!reloading) { reloading = true; location.reload(); }
+  });
+}
+</script>
+</body>
+</html>
