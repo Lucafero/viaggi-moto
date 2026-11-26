@@ -26,6 +26,25 @@ const CATEGORIES = [
 const catOf = (k) => CATEGORIES.find((c) => c[0] === k) || CATEGORIES[CATEGORIES.length - 1];
 const SLEEP = [['', '—'], ['tenda', '⛺ Tenda'], ['campeggio', '🏕️ Campeggio'], ['struttura', '🏨 Struttura'], ['deserto', '🐪 Deserto'], ['altro', 'Altro']];
 
+// Conto alla rovescia: giorni di calendario che mancano alla partenza.
+function countdown(startDate, startTime) {
+  if (!startDate) return null;
+  const start = new Date(`${startDate}T12:00:00`);
+  const now = new Date();
+  const todayNoon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+  const days = Math.round((start - todayNoon) / 86400000);
+  const label = start.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' });
+  const at = startTime ? `, ore ${startTime.replace(/^0/, '')}` : '';
+  if (days > 1) return { big: `${days.toLocaleString('it-IT')}`, unit: 'giorni alla partenza', sub: `Partenza ${label}${at}` };
+  if (days === 1) return { big: '1', unit: 'giorno alla partenza: è domani!', sub: `Partenza ${label}${at}` };
+  if (days === 0) return { big: '🏍️', unit: 'Si parte oggi!', sub: startTime ? `Partenza ore ${startTime}` : 'Buon viaggio' };
+  return { big: `${-days + 1}°`, unit: 'giorno di viaggio', sub: `Partiti ${label}` };
+}
+const countdownHtml = (t) => {
+  const c = countdown(t?.startDate, t?.startTime);
+  return c ? `<div class="countdown"><div class="cd-big">${c.big}</div><div><div class="cd-unit">${c.unit}</div><div class="small">${esc(c.sub)}</div></div></div>` : '';
+};
+
 // ---------- stato locale (sul telefono) ----------
 const LS = 'viaggi-moto';
 const local = (() => { try { return JSON.parse(localStorage.getItem(LS)) || { trips: [] }; } catch { return { trips: [] }; } })();
@@ -81,7 +100,7 @@ function openTrip(id) {
     S.db.watchTrip(id, (t) => {
       S.trip = t;
       const lt = local.trips.find((x) => x.id === id);
-      if (lt && lt.name !== t.name) { lt.name = t.name; saveLocal(); }
+      if (lt && (lt.name !== t.name || lt.startDate !== t.startDate)) { lt.name = t.name; lt.startDate = t.startDate || ''; saveLocal(); }
       render();
     }),
     S.db.watchColl(id, 'expenses', (items) => { S.expenses = items; render(); }),
@@ -114,7 +133,7 @@ function renderSync() {
 function viewHome() {
   const list = local.trips.map((t) => `
     <button class="card row" data-a="open" data-id="${t.id}">
-      <div><div class="title">${esc(t.name)}</div><div class="muted small">Tu sei: ${esc(t.meName || '')}</div></div>
+      <div><div class="title">${esc(t.name)}</div><div class="muted small">Tu sei: ${esc(t.meName || '')}${(() => { const c = countdown(t.startDate); return c && /giorn/.test(c.unit) && !/viaggio/.test(c.unit) ? ` · 🏁 tra ${c.big} ${c.big === '1' ? 'giorno' : 'giorni'}` : ''; })()}</div></div>
       <span class="chev">›</span>
     </button>`).join('');
   return `
@@ -218,6 +237,7 @@ function tabSpese() {
     </button>`;
   }).join('');
   return `
+    ${countdownHtml(S.trip)}
     <div class="summary"><div><div class="muted small">Speso in totale</div><div class="big">${fmt(tot)}</div></div>
       <div class="right"><div class="muted small">Tu sei</div><div class="title">${esc(myName())}</div></div></div>
     <div class="row gap"><button class="btn" data-a="new-exp">＋ Spesa</button><button class="btn ghost" data-a="new-transfer">↔️ Rimborso</button></div>
@@ -367,6 +387,11 @@ function tabViaggio() {
     <div class="card">
       <label>Nome del viaggio<input data-t="name" value="${esc(S.trip.name)}"></label>
       <label>Cambio: dirham per 1 euro<input data-t="rate" inputmode="decimal" value="${esc(String(S.trip.rate).replace('.', ','))}"></label>
+      <div class="row gap">
+        <label class="grow">Data di partenza<input type="date" data-t="startDate" value="${esc(S.trip.startDate || '')}"></label>
+        <label class="grow">Ora<input type="time" data-t="startTime" value="${esc(S.trip.startTime || '')}"></label>
+      </div>
+      <p class="small muted">Con la data di partenza compare il conto alla rovescia.</p>
     </div>
     <h2>Partecipanti</h2>
     <div class="card">
@@ -576,8 +601,10 @@ function onInput(ev) {
   } else if (t.dataset.s !== undefined) {
     S.form[t.dataset.s] = t.value;
   } else if (t.dataset.t !== undefined && ev.type === 'change') {
-    const v = t.dataset.t === 'rate' ? parseFloat(t.value.replace(',', '.')) || rate() : t.value.trim();
-    if (v) S.db.updateTrip(S.tripId, { [t.dataset.t]: v });
+    const k = t.dataset.t;
+    if (k === 'startDate' || k === 'startTime') { S.db.updateTrip(S.tripId, { [k]: t.value }); return; }
+    const v = k === 'rate' ? parseFloat(t.value.replace(',', '.')) || rate() : t.value.trim();
+    if (v) S.db.updateTrip(S.tripId, { [k]: v });
   } else if (t.dataset.member !== undefined && ev.type === 'change') {
     const ms = members().map((m) => (m.id === t.dataset.member ? { ...m, name: t.value.trim() || m.name } : m));
     S.db.updateTrip(S.tripId, { members: ms });
