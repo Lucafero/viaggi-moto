@@ -1,10 +1,11 @@
 // Tiene l'app salvata sul telefono, così si apre anche senza rete.
-const VERSION = '202611261833';
+const VERSION = '202611261840';
 const CACHE = `viaggi-moto-${VERSION}`;
 const FILES = ['./', 'index.html', `app.js?v=${VERSION}`, 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)));
+  // cache: 'reload' scavalca la cache del browser, così non salviamo file di una versione vecchia.
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' })))));
 });
 
 self.addEventListener('activate', (e) => {
@@ -21,5 +22,10 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(caches.match('index.html').then((r) => r || fetch(e.request)));
     return;
   }
-  e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
+  // Se manca la versione esatta, va bene anche quella salvata con un altro numero di versione.
+  e.respondWith(
+    caches.match(e.request)
+      .then((r) => r || caches.match(e.request, { ignoreSearch: true }))
+      .then((r) => r || fetch(e.request)),
+  );
 });
