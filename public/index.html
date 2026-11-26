@@ -123,6 +123,8 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
       });
     });
     setInterval(function () { reg.update(); }, 30 * 60 * 1000);
+    // Controlla gli aggiornamenti anche ogni volta che si torna sull'app.
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') reg.update(); });
   });
   var reloading = false;
   navigator.serviceWorker.addEventListener('controllerchange', function () {

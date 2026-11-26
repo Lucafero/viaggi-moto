@@ -105,8 +105,8 @@ input.conv{font-size:26px;font-weight:700;padding:14px}
 <body>
 <div id="app"></div>
 <button id="update">🔄 Nuova versione disponibile · tocca per aggiornare</button>
-<script>window.APP_VERSION = '202611262046';</script>
-<script type="module" src="app.js?v=202611262046"></script>
+<script>window.APP_VERSION = '202611262059';</script>
+<script type="module" src="app.js?v=202611262059"></script>
 <script>
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').then(function (reg) {
@@ -123,6 +123,8 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
       });
     });
     setInterval(function () { reg.update(); }, 30 * 60 * 1000);
+    // Controlla gli aggiornamenti anche ogni volta che si torna sull'app.
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') reg.update(); });
   });
   var reloading = false;
   navigator.serviceWorker.addEventListener('controllerchange', function () {
