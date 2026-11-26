@@ -83,6 +83,10 @@ export const db = {
     setDoc(doc(fs, 'trips', tripId, name, id), data).catch((e) => console.error(e));
   },
 
+  mergeItem(tripId, name, id, data) {
+    setDoc(doc(fs, 'trips', tripId, name, id), data, { merge: true }).catch((e) => console.error(e));
+  },
+
   deleteItem(tripId, name, id) {
     deleteDoc(doc(fs, 'trips', tripId, name, id)).catch((e) => console.error(e));
   },

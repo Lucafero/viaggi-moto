@@ -52,7 +52,7 @@ const saveLocal = () => localStorage.setItem(LS, JSON.stringify(local));
 
 const S = {
   db: null, view: 'home', tab: 'spese',
-  tripId: null, trip: null, expenses: [], stages: [], posts: [], gpx: [], unsub: [], postDraft: '',
+  tripId: null, trip: null, expenses: [], stages: [], posts: [], gpx: [], presence: [], presenceDone: false, unsub: [], postDraft: '',
   pending: 0, online: navigator.onLine, modal: null, form: null, joinCode: '', joinTrip: null, msg: '',
 };
 
@@ -74,6 +74,8 @@ export async function start(db) {
   document.addEventListener('click', onClick);
   document.addEventListener('input', onInput);
   document.addEventListener('change', onInput);
+  // Quando si torna all'app dopo averla lasciata in sottofondo, aggiorna "visto alle…".
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { S.presenceDone = false; markPresence(); } });
 
   $('#app').innerHTML = '<div class="center muted">Caricamento…</div>';
   try {
@@ -94,7 +96,7 @@ export async function start(db) {
 
 function openTrip(id) {
   S.unsub.forEach((f) => f());
-  S.tripId = id; S.view = 'trip'; S.trip = null; S.expenses = []; S.stages = []; S.posts = []; S.gpx = [];
+  S.tripId = id; S.view = 'trip'; S.trip = null; S.expenses = []; S.stages = []; S.posts = []; S.gpx = []; S.presence = []; S.presenceDone = false;
   local.current = id; saveLocal();
   S.unsub = [
     S.db.watchTrip(id, (t) => {
@@ -107,7 +109,38 @@ function openTrip(id) {
     S.db.watchColl(id, 'stages', (items) => { S.stages = items; render(); }),
     S.db.watchColl(id, 'posts', (items) => { S.posts = items; render(); }),
     S.db.watchColl(id, 'gpx', (items) => { S.gpx = items; render(); }),
+    S.db.watchColl(id, 'presence', (items) => { S.presence = items; markPresence(); render(); }),
   ];
+}
+
+// Segna che questo partecipante ha aperto l'app (una volta per apertura).
+const isInstalled = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+function markPresence() {
+  const m = me();
+  if (S.presenceDone || !m || !S.tripId) return;
+  S.presenceDone = true;
+  const mine = S.presence.find((x) => x.id === m) || {};
+  S.db.mergeItem(S.tripId, 'presence', m, {
+    joinedAt: mine.joinedAt || Date.now(), lastSeen: Date.now(),
+    installed: !!(mine.installed || isInstalled()), version: window.APP_VERSION || '',
+  });
+}
+function seenLabel(ms) {
+  if (!ms) return '';
+  const d = new Date(ms), now = new Date();
+  const hm = d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  if (diff === 0) return `oggi alle ${hm}`;
+  if (diff === 1) return `ieri alle ${hm}`;
+  return `${d.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })} alle ${hm}`;
+}
+function presenceLine(memberId) {
+  const p = S.presence.find((x) => x.id === memberId);
+  if (!p || !p.joinedAt) return '<div class="small muted pres">⏳ non ancora entrato</div>';
+  const joined = new Date(p.joinedAt).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' });
+  const old = p.version && window.APP_VERSION && p.version < window.APP_VERSION ? ' · ⚠️ versione vecchia' : '';
+  return `<div class="small muted pres">✅ entrato il ${joined}${p.installed ? ' · 📱 app installata' : ''} · visto ${seenLabel(p.lastSeen)}${old}</div>`;
 }
 
 // ---------- rendering ----------
@@ -395,8 +428,9 @@ function tabViaggio() {
     </div>
     <h2>Partecipanti</h2>
     <div class="card">
-      ${members().map((m) => `<div class="row gap line"><input data-member="${m.id}" value="${esc(m.name)}">
-        ${m.id === me() ? '<span class="pill on">Tu</span>' : `<button class="pill" data-a="i-am" data-id="${m.id}">Sono io</button>`}</div>`).join('')}
+      ${members().map((m) => `<div class="line"><div class="row gap"><input data-member="${m.id}" value="${esc(m.name)}">
+        ${m.id === me() ? '<span class="pill on">Tu</span>' : `<button class="pill" data-a="i-am" data-id="${m.id}">Sono io</button>`}</div>
+        ${presenceLine(m.id)}</div>`).join('')}
       <button class="link" data-a="add-member">＋ aggiungi partecipante</button>
     </div>
     <h2>Dati</h2>
@@ -737,7 +771,7 @@ async function onClick(ev) {
     case 'copy': navigator.clipboard?.writeText(`${location.origin}${location.pathname}?t=${S.tripId}`).then(() => alert('Link copiato')); break;
     case 'i-am': {
       const lt = local.trips.find((x) => x.id === S.tripId);
-      lt.me = id; lt.meName = nameOf(id); saveLocal(); render(); break;
+      lt.me = id; lt.meName = nameOf(id); saveLocal(); S.presenceDone = false; markPresence(); render(); break;
     }
     case 'add-member': {
       const n = prompt('Nome del nuovo partecipante');
@@ -753,7 +787,7 @@ async function onClick(ev) {
     case 'del-trip': {
       if ((f.confirm || '').trim().toLowerCase() !== S.trip.name.trim().toLowerCase()) { $('#experr').textContent = 'Il nome non corrisponde.'; return; }
       const id = S.tripId;
-      [['expenses', S.expenses], ['stages', S.stages], ['posts', S.posts], ['gpx', S.gpx]].forEach(([c, items]) => items.forEach((x) => S.db.deleteItem(id, c, x.id)));
+      [['expenses', S.expenses], ['stages', S.stages], ['posts', S.posts], ['gpx', S.gpx], ['presence', S.presence]].forEach(([c, items]) => items.forEach((x) => S.db.deleteItem(id, c, x.id)));
       S.db.updateTrip(id, { deleted: true, deletedAt: Date.now() });
       local.trips = local.trips.filter((x) => x.id !== id);
       S.unsub.forEach((x) => x()); S.unsub = []; local.current = null; saveLocal();

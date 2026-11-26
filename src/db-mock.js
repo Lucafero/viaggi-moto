@@ -28,5 +28,9 @@ export const db = {
     const c = data.trips[tripId]._c;
     (c[name] = c[name] || {})[id] = d; save(); emit();
   },
+  mergeItem(tripId, name, id, d) {
+    const c = data.trips[tripId]._c;
+    (c[name] = c[name] || {})[id] = { ...((c[name] || {})[id] || {}), ...d }; save(); emit();
+  },
   deleteItem(tripId, name, id) { delete data.trips[tripId]._c[name][id]; save(); emit(); },
 };
