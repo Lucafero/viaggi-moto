@@ -1,5 +1,5 @@
 import {
-  toCents, fmt, fmtSigned, expenseEffect, balances, settle, stageKm, duration, toEur,
+  toCents, parseNum, fmt, fmtSigned, expenseEffect, balances, settle, stageKm, duration, toEur,
 } from './calc.js';
 
 // ---------- utilità ----------
@@ -152,6 +152,7 @@ function render() {
   else if (S.view === 'trip') app.innerHTML = S.trip ? viewTrip() : '<div class="center muted">Apro il viaggio…</div>';
   // Se un modulo è aperto non lo ridisegniamo: chi sta scrivendo non perde il cursore.
   if (!S.modal || !$('#modal')) renderModal();
+  else if (S.modal === 'conv' && !document.activeElement?.matches?.('input')) renderModal();
   renderSync();
 }
 
@@ -232,6 +233,7 @@ function viewTrip() {
     <header class="top">
       <button class="back" data-a="home" aria-label="Tutti i viaggi">‹</button>
       <div class="grow"><h1>${esc(S.trip.name)}</h1><div id="sync" class="sync"></div></div>
+      <button class="hbtn" data-a="conv" aria-label="Convertitore">💱</button>
     </header>
     <main class="pad with-nav">${body}</main>
     <nav class="nav">${tabs.map(([k, i, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-a="tab" data-tab="${k}"><span>${i}</span>${l}</button>`).join('')}</nav>`;
@@ -453,7 +455,7 @@ function renderModal() {
   if (!S.modal) { if (el) el.remove(); document.body.classList.remove('lock'); return; }
   if (!el) { el = document.createElement('div'); el.id = 'modal'; document.body.appendChild(el); }
   document.body.classList.add('lock');
-  el.innerHTML = { expense: modalExpense, transfer: modalTransfer, stage: modalStage, saved: modalSaved, deltrip: modalDelTrip }[S.modal]();
+  el.innerHTML = { expense: modalExpense, transfer: modalTransfer, stage: modalStage, saved: modalSaved, deltrip: modalDelTrip, conv: modalConv }[S.modal]();
   if (S.modal === 'expense') updatePreview();
 }
 
@@ -479,6 +481,7 @@ function modalExpense() {
         <label class="grow">Totale scontrino<input data-e="total" inputmode="decimal" value="${esc(f.total)}" placeholder="0,00"></label>
         <div class="seg">${['EUR', 'MAD'].map((c) => `<button class="${f.currency === c ? 'on' : ''}" data-a="cur" data-c="${c}">${c === 'EUR' ? '€' : 'DH'}</button>`).join('')}</div>
       </div>
+      <div id="eqv" class="small muted eqv"></div>
       <label>Descrizione<input data-e="description" value="${esc(f.description)}" placeholder="es. Supermercato"></label>
       <div class="row gap">
         <label class="grow">Data<input type="date" data-e="date" value="${esc(f.date)}"></label>
@@ -530,6 +533,8 @@ function updatePreview() {
   if (!f || S.modal !== 'expense') return;
   const { rest, lines, total } = resolveLines(f);
   const r = $('#resto'); if (r) r.textContent = fmt(rest, f.currency);
+  const q = $('#eqv');
+  if (q) q.textContent = total ? (f.currency === 'MAD' ? `≈ ${fmt(toEur(total, 'MAD', rate()))} (1 € = ${fmtNum(rate())} DH)` : `≈ ${fmt(Math.round(total * rate()), 'MAD')}`) : '';
   const p = $('#preview'); if (!p) return;
   if (!total) { p.innerHTML = '<span class="muted small">Scrivi il totale per vedere la divisione.</span>'; return; }
   const eff = expenseEffect({ total, currency: f.currency, payer: f.payer, lines }, rate());
@@ -578,6 +583,49 @@ function modalStage() {
     </main></div>`;
 }
 
+const num = parseNum;
+const fmtNum = (v) => (Number.isFinite(v) ? v.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
+
+function modalConv() {
+  const upd = S.trip.rateUpdatedAt ? `Aggiornato ${seenLabel(S.trip.rateUpdatedAt)}${S.trip.rateBy ? ` da ${esc(S.trip.rateBy)}` : ''}` : 'Cambio inserito alla creazione del viaggio';
+  return `<div class="sheet small-sheet"><main class="pad">
+    <div class="row"><h2>💱 Convertitore</h2><button class="back" data-a="close">✕</button></div>
+    <label>Dirham (DH)<input class="conv" data-cv="mad" inputmode="decimal" placeholder="0,00" autocomplete="off"></label>
+    <label>Euro (€)<input class="conv" data-cv="eur" inputmode="decimal" placeholder="0,00" autocomplete="off"></label>
+    <div class="card">
+      <div class="row"><span>1 € = <b>${fmtNum(rate())} DH</b></span><span class="muted small">1 DH = ${(1 / rate()).toLocaleString('it-IT', { maximumFractionDigits: 3 })} €</span></div>
+      <div class="muted small">${upd}</div>
+      <button class="btn ghost" data-a="rate-fetch">🔄 Aggiorna cambio di oggi (serve internet)</button>
+      <label>Oppure scrivilo a mano (es. quello del cambiavalute)<input data-t="rate" inputmode="decimal" value="${esc(String(rate()).replace('.', ','))}"></label>
+      <p id="rateMsg" class="small muted"></p>
+    </div>
+  </main></div>`;
+}
+
+async function fetchRate() {
+  const msg = (t) => { const e = $('#rateMsg'); if (e) e.textContent = t; };
+  msg('Cerco il cambio di oggi…');
+  const sources = [
+    ['https://open.er-api.com/v6/latest/EUR', (d) => d?.rates?.MAD],
+    ['https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/eur.json', (d) => d?.eur?.mad],
+    ['https://latest.currency-api.pages.dev/v1/currencies/eur.json', (d) => d?.eur?.mad],
+  ];
+  for (const [url, pick] of sources) {
+    try {
+      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 8000);
+      const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); clearTimeout(tm);
+      const v = Number(pick(await r.json()));
+      if (v > 5 && v < 25) { // controllo di buon senso: 1 € vale circa 10-11 DH
+        const val = Math.round(v * 1000) / 1000;
+        S.db.updateTrip(S.tripId, { rate: val, rateUpdatedAt: Date.now(), rateBy: myName() });
+        msg(`Fatto: 1 € = ${fmtNum(val)} DH. Vale per tutti e tre.`);
+        return;
+      }
+    } catch (e) { /* provo la fonte successiva */ }
+  }
+  msg('Non riesco a scaricare il cambio adesso. Resta valido quello salvato, oppure scrivilo a mano.');
+}
+
 function modalDelTrip() {
   return `<div class="sheet small-sheet"><main class="pad">
     <h2>🗑️ Eliminare "${esc(S.trip.name)}"?</h2>
@@ -623,6 +671,13 @@ function onInput(ev) {
     return;
   }
   if (t.dataset.p !== undefined) { S.postDraft = t.value; return; }
+  if (t.dataset.cv !== undefined) {
+    if (ev.type !== 'input') return;
+    const v = num(t.value);
+    const other = $(`[data-cv="${t.dataset.cv === 'mad' ? 'eur' : 'mad'}"]`);
+    if (other) other.value = t.value.trim() === '' || !Number.isFinite(v) ? '' : fmtNum(t.dataset.cv === 'mad' ? v / rate() : v * rate());
+    return;
+  }
   if (t.dataset.f !== undefined) {
     const k = t.dataset.f;
     if (k === 'joinCode') { S.joinCode = t.value; return; }
@@ -638,6 +693,7 @@ function onInput(ev) {
     const k = t.dataset.t;
     if (k === 'startDate' || k === 'startTime') { S.db.updateTrip(S.tripId, { [k]: t.value }); return; }
     const v = k === 'rate' ? parseFloat(t.value.replace(',', '.')) || rate() : t.value.trim();
+    if (k === 'rate') { S.db.updateTrip(S.tripId, { rate: v, rateUpdatedAt: Date.now(), rateBy: myName() }); return; }
     if (v) S.db.updateTrip(S.tripId, { [k]: v });
   } else if (t.dataset.member !== undefined && ev.type === 'change') {
     const ms = members().map((m) => (m.id === t.dataset.member ? { ...m, name: t.value.trim() || m.name } : m));
@@ -802,6 +858,8 @@ async function onClick(ev) {
     case 'post-del': if (confirm('Eliminare il messaggio?')) S.db.deleteItem(S.tripId, 'posts', id); break;
     case 'gpx-dl': { const g = S.gpx.find((x) => x.id === id); download(`${g.name}.gpx`, g.text, 'application/gpx+xml'); break; }
     case 'gpx-del': if (confirm('Eliminare il file GPX per tutti?')) S.db.deleteItem(S.tripId, 'gpx', id); break;
+    case 'conv': S.modal = 'conv'; S.form = {}; renderModal(); setTimeout(() => $('[data-cv=mad]')?.focus(), 50); break;
+    case 'rate-fetch': fetchRate(); break;
     case 'export-csv': download(`${S.trip.name}-spese.csv`, expensesCsv(), 'text/csv'); break;
     default: break;
   }

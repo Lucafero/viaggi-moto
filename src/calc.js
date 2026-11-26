@@ -1,9 +1,18 @@
 // Calcoli puri: nessuna dipendenza da Firebase o dal DOM.
 // Tutti gli importi sono in centesimi (interi).
 
+// Legge numeri scritti all'italiana: "1.250,50", "12,5", "12.5", "1.000".
+export const parseNum = (v) => {
+  if (typeof v === 'number') return v;
+  let t = String(v ?? '').trim().replace(/\s|€|DH/gi, '');
+  if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+  else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
+  return parseFloat(t);
+};
+
 export const toCents = (v) => {
   if (v === null || v === undefined || v === '') return 0;
-  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'));
+  const n = parseNum(v);
   return Number.isFinite(n) ? Math.round(n * 100) : 0;
 };
 
