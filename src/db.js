@@ -1,6 +1,5 @@
 // Accesso a Firebase. L'interfaccia è la stessa del finto db usato per i test (db-mock.js).
 import { initializeApp } from 'firebase/app';
-import { getAuth, onAuthStateChanged, signInAnonymously } from 'firebase/auth';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   doc, collection, setDoc, getDoc, getDocFromCache, deleteDoc, onSnapshot,
@@ -16,7 +15,6 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
 // Cache locale persistente: i dati restano sul telefono e funzionano senza rete.
 const fs = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
@@ -32,14 +30,9 @@ const reportSync = () => {
 };
 
 export const db = {
-  async init() {
-    const user = await new Promise((res) => {
-      const off = onAuthStateChanged(auth, (u) => { off(); res(u); });
-    });
-    if (user) return user;
-    const cred = await signInAnonymously(auth); // serve internet solo la prima volta
-    return cred.user;
-  },
+  // Nessun login: l'accesso è protetto dal codice lungo e casuale del viaggio.
+  // Così l'app parte subito anche senza rete.
+  async init() { return { uid: 'local' }; },
 
   onSync(cb) { syncCb = cb; },
 
