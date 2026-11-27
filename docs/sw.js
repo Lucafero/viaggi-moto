@@ -1,5 +1,5 @@
 // Tiene l'app salvata sul telefono, così si apre anche senza rete.
-const VERSION = '202611271452';
+const VERSION = '202611271457';
 const CACHE = `viaggi-moto-${VERSION}`;
 const FILES = ['./', 'index.html', `app.js?v=${VERSION}`, 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 

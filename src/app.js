@@ -293,26 +293,14 @@ const namesList = (ids) => {
   const n = ids.map(nameOf);
   return n.length > 1 ? `${n.slice(0, -1).join(', ')} e ${n[n.length - 1]}` : n[0] || '';
 };
+// Messaggi brevi: chi ha fatto cosa, più il link per aprire il viaggio.
 function expenseMsg(exp, edited) {
-  const who = myName();
-  if (exp.kind === 'rimborso') {
-    return `↔️ ${who} ha ${edited ? 'modificato un rimborso' : 'registrato un rimborso'}: ${nameOf(exp.payer)} ha dato ${fmt(exp.total, exp.currency)} a ${nameOf(exp.lines?.[0]?.users?.[0])}.\n👉 ${tripLink()}`;
-  }
-  const eur = exp.currency === 'MAD' ? ` (${fmt(toEur(exp.total, 'MAD', rate()))})` : '';
-  const lines = exp.lines.length > 1
-    ? `\n${exp.lines.map((l) => `• ${fmt(l.amount, exp.currency)} per ${namesList(l.users)}`).join('\n')}`
-    : ` · divisa per ${namesList(exp.lines[0]?.users || [])}`;
-  const bal = balances(S.expenses.filter((e) => e.id !== exp.id).concat(exp), members(), rate());
-  const saldi = members().map((m) => `${m.name} ${bal[m.id]?.net ? fmtSigned(bal[m.id].net) : '0'}`).join(', ');
-  return `💶 ${who} ha ${edited ? 'modificato' : 'aggiunto'} una spesa: ${exp.description || catOf(exp.category)[2]} ${fmt(exp.total, exp.currency)}${eur}, pagata da ${nameOf(exp.payer)}${lines}\n⚖️ Saldi: ${saldi}\n👉 ${tripLink()}`;
+  const what = exp.kind === 'rimborso' ? 'un rimborso' : 'una spesa';
+  const verb = exp.kind === 'rimborso' && !edited ? 'registrato' : edited ? 'modificato' : 'aggiunto';
+  return `${exp.kind === 'rimborso' ? '↔️' : '💶'} ${myName()} ha ${verb} ${what}\n👉 ${tripLink()}`;
 }
-function stageMsg(s, edited) {
-  const k = stageKm(s);
-  const sleep = SLEEP.find((x) => x[0] === s.sleep);
-  const bits = [dayLabel(s.date), k ? `${k} km` : '', s.sleep && sleep ? `si dorme: ${sleep[1]}` : ''].filter(Boolean).join(', ');
-  return `🏍️ ${myName()} ha ${edited ? 'modificato' : 'aggiunto'} ${s.status === 'prevista' ? 'una tappa prevista' : 'una tappa'}: ${s.from || '?'} → ${s.to || '?'}${bits ? ` (${bits})` : ''}\n👉 ${tripLink()}`;
-}
-const updateMsg = () => `🔄 C'è una nuova versione dell'app Viaggi in Moto. Aprila con internet e tocca "Nuova versione disponibile".\n👉 ${location.origin}${location.pathname}`;
+const stageMsg = (s, edited) => `🏍️ ${myName()} ha ${edited ? 'modificato' : 'aggiunto'} una tappa\n👉 ${tripLink()}`;
+const updateMsg = () => `🔄 È disponibile una nuova versione dell'app: aprila per aggiornarla.\n👉 ${location.origin}${location.pathname}`;
 
 // ---------- rendering ----------
 function render() {
@@ -582,7 +570,7 @@ async function uploadGpx(file) {
     uploadedBy: myName(), uploadedById: me(), createdAt: Date.now(),
   });
   render();
-  S.form = { title: '✅ File GPX caricato', msg: `🗺️ ${myName()} ha caricato il file GPX "${file.name.replace(/\.gpx$/i, '')}"${km ? ` (${Math.round(km)} km)` : ''}: lo trovate in Tappe.\n👉 ${tripLink()}` };
+  S.form = { title: '✅ File GPX caricato', msg: `🗺️ ${myName()} ha caricato un file GPX\n👉 ${tripLink()}` };
   S.modal = 'share'; renderModal();
 }
 
@@ -1064,7 +1052,7 @@ async function onClick(ev) {
       if (!text) return;
       S.db.saveItem(S.tripId, 'posts', { id: rid(16), text, author: myName(), authorId: me(), createdAt: Date.now() });
       S.postDraft = ''; render();
-      S.form = { title: '✅ Messaggio pubblicato', msg: `📌 ${myName()} ha scritto in bacheca: "${text}"\n👉 ${tripLink()}` }; S.modal = 'share'; renderModal(); break;
+      S.form = { title: '✅ Messaggio pubblicato', msg: `📌 ${myName()} ha scritto in bacheca\n👉 ${tripLink()}` }; S.modal = 'share'; renderModal(); break;
     }
     case 'post-del': if (confirm('Eliminare il messaggio?')) S.db.deleteItem(S.tripId, 'posts', id); break;
     case 'gpx-dl': { const g = S.gpx.find((x) => x.id === id); download(`${g.name}.gpx`, g.text, 'application/gpx+xml'); break; }
