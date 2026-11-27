@@ -98,7 +98,7 @@ const saveLocal = () => localStorage.setItem(LS, JSON.stringify(local));
 
 const S = {
   db: null, view: 'home', tab: 'spese',
-  tripId: null, trip: null, expenses: [], stages: [], posts: [], gpx: [], presence: [], presenceDone: false, unsub: [], postDraft: '',
+  tripId: null, trip: null, expenses: [], stages: [], posts: [], gpx: [], presence: [], presenceDone: false, unsub: [], postDraft: '', hl: {}, counts: {}, homeData: {}, homeUnsub: [], balFrom: undefined, justUpdated: false,
   pending: 0, online: navigator.onLine, modal: null, form: null, joinCode: '', joinTrip: null, msg: '',
 };
 
@@ -130,32 +130,39 @@ export async function start(db) {
     $('#app').innerHTML = `<div class="center"><p><b>Serve internet al primo avvio.</b></p><p class="muted">Collegati e riapri l'app. Dopo funzionerà anche senza rete.</p><button class="btn" data-a="reload">Riprova</button></div>`;
     return;
   }
+  if (local.lastVersion && local.lastVersion !== window.APP_VERSION) S.justUpdated = true;
+  local.lastVersion = window.APP_VERSION; saveLocal();
   const t = new URLSearchParams(location.search).get('t');
+  if (t) history.replaceState(null, '', location.pathname);
   if (t && !local.trips.find((x) => x.id === t)) {
-    S.view = 'join'; S.joinCode = t; history.replaceState(null, '', location.pathname);
+    S.view = 'join'; S.joinCode = t;
     lookupTrip();
+  } else if (t) {
+    S.tab = 'spese'; openTrip(t); // link di un viaggio in cui sei già: aprilo
   } else if (local.current && local.trips.find((x) => x.id === local.current)) {
     openTrip(local.current);
-  }
+  } else watchHome();
   render();
 }
 
 function openTrip(id) {
   S.unsub.forEach((f) => f());
-  S.tripId = id; S.view = 'trip'; S.trip = null; S.expenses = []; S.stages = []; S.posts = []; S.gpx = []; S.presence = []; S.presenceDone = false;
+  unwatchHome();
+  S.tripId = id; S.view = 'trip'; S.trip = null; S.expenses = []; S.stages = []; S.posts = []; S.gpx = []; S.presence = []; S.presenceDone = false; S.hl = {}; S.balFrom = undefined;
   local.current = id; saveLocal();
   S.unsub = [
     S.db.watchTrip(id, (t) => {
       S.trip = t;
       const lt = local.trips.find((x) => x.id === id);
-      if (lt && (lt.name !== t.name || lt.startDate !== t.startDate)) { lt.name = t.name; lt.startDate = t.startDate || ''; saveLocal(); }
+      const own = !!lt && lt.me === (t.ownerId || t.members?.[0]?.id);
+      if (lt && (lt.name !== t.name || lt.startDate !== t.startDate || lt.owner !== own)) { lt.name = t.name; lt.startDate = t.startDate || ''; lt.owner = own; saveLocal(); }
       render();
     }),
-    S.db.watchColl(id, 'expenses', (items) => { S.expenses = items; render(); }),
-    S.db.watchColl(id, 'stages', (items) => { S.stages = items; render(); }),
-    S.db.watchColl(id, 'posts', (items) => { S.posts = items; render(); }),
-    S.db.watchColl(id, 'gpx', (items) => { S.gpx = items; render(); }),
-    S.db.watchColl(id, 'presence', (items) => { S.presence = items; markPresence(); render(); }),
+    S.db.watchColl(id, 'expenses', (items, meta) => { initKnown(id, 'expenses', items, meta); S.expenses = items; render(); }),
+    S.db.watchColl(id, 'stages', (items, meta) => { initKnown(id, 'stages', items, meta); S.stages = items; render(); }),
+    S.db.watchColl(id, 'posts', (items, meta) => { initKnown(id, 'posts', items, meta); S.posts = items; render(); }),
+    S.db.watchColl(id, 'gpx', (items, meta) => { initKnown(id, 'gpx', items, meta); S.gpx = items; render(); }),
+    S.db.watchColl(id, 'presence', (items, meta) => { initKnown(id, 'presence', items, meta); S.presence = items; markPresence(); render(); }),
   ];
 }
 
@@ -189,13 +196,136 @@ function presenceLine(memberId) {
   return `<div class="small muted pres">✅ entrato il ${joined}${p.installed ? ' · 📱 app installata' : ''} · visto ${seenLabel(p.lastSeen)}${old}</div>`;
 }
 
+// ---------- novità (contatori) ----------
+// Ogni telefono ricorda quali voci ha già visto (id + data dell'ultima modifica).
+// Quello che gli altri aggiungono o modificano dopo è una "novità".
+const TAB_COLLS = { spese: ['expenses'], tappe: ['stages', 'gpx'], bacheca: ['posts'], viaggio: ['presence'] };
+const ALL_COLLS = ['expenses', 'stages', 'gpx', 'posts', 'presence'];
+const stampOf = (c, x) => (c === 'presence' ? x.joinedAt || 0 : x.updatedAt || x.createdAt || 0);
+const whoId = (c, x) => (c === 'presence' ? x.id : x.updatedById || x.createdById || x.authorId || x.uploadedById || null);
+const whoName = (c, x) => (c === 'presence' ? null : x.updatedBy || x.createdBy || x.author || x.uploadedBy || null);
+function knownOf(tid) { local.known = local.known || {}; return (local.known[tid] = local.known[tid] || { _init: {} }); }
+
+// Prima volta che una raccolta arriva dal server su questo telefono: tutto quello che c'è è "già visto".
+function initKnown(tid, c, items, meta) {
+  const k = knownOf(tid);
+  if (k._init[c]) return;
+  if (meta?.fromCache && !items.length) return; // aspetta i dati veri dal server
+  items.forEach((x) => { k[`${c}:${x.id}`] = stampOf(c, x); });
+  k._init[c] = true; saveLocal();
+}
+
+function novelties(tid, data, meId, meName) {
+  const k = knownOf(tid), out = { spese: [], tappe: [], bacheca: [], viaggio: [] };
+  Object.entries(TAB_COLLS).forEach(([tab, colls]) => colls.forEach((c) => {
+    if (!k._init[c]) return;
+    (data[c] || []).forEach((x) => {
+      const st = stampOf(c, x);
+      if (!st) return;
+      const id = whoId(c, x), nm = whoName(c, x);
+      const other = id ? id !== meId : nm ? nm !== meName : false;
+      if (!other) return;
+      const prev = k[`${c}:${x.id}`];
+      if (prev === undefined) out[tab].push({ key: `${c}:${x.id}`, kind: 'new', who: c === 'presence' ? null : nm });
+      else if (st > prev) out[tab].push({ key: `${c}:${x.id}`, kind: 'mod', who: nm });
+    });
+  }));
+  return out;
+}
+const countNov = (n) => (n ? n.spese.length + n.tappe.length + n.bacheca.length + n.viaggio.length : 0);
+
+function markKnown(tid, tab, data) {
+  const k = knownOf(tid); let changed = false;
+  (TAB_COLLS[tab] || []).forEach((c) => (data[c] || []).forEach((x) => {
+    const key = `${c}:${x.id}`, st = stampOf(c, x);
+    if (k[key] !== st) { k[key] = st; changed = true; }
+  }));
+  if (changed) saveLocal();
+}
+
+const curData = () => ({ expenses: S.expenses, stages: S.stages, gpx: S.gpx, posts: S.posts, presence: S.presence });
+
+// Calcola le novità del viaggio aperto: la scheda che stai guardando si azzera,
+// ma le voci restano evidenziate finché non cambi scheda.
+function refreshNovelties() {
+  if (S.view !== 'trip' || !S.trip) return null;
+  const nov = novelties(S.tripId, curData(), me(), myName());
+  (nov[S.tab] || []).forEach((n) => { if (!S.hl[n.key]) S.hl[n.key] = n; });
+  if (TAB_COLLS[S.tab]) { markKnown(S.tripId, S.tab, curData()); nov[S.tab] = []; }
+  S.counts[S.tripId] = countNov(nov);
+  updateIconBadge();
+  return nov;
+}
+const hlTag = (c, id) => {
+  const h = S.hl[`${c}:${id}`];
+  if (!h) return '';
+  const word = h.kind === 'new' ? (c === 'expenses' || c === 'stages' ? 'NUOVA' : 'NUOVO') : (c === 'expenses' || c === 'stages' ? 'MODIFICATA' : 'MODIFICATO');
+  return `<span class="tag-new">${word}${h.who ? ` · ${esc(h.who)}` : ''}</span>`;
+};
+const hlCls = (c, id) => (S.hl[`${c}:${id}`] ? ' is-new' : '');
+
+// Numero sull'icona (solo iPhone con permesso notifiche; Android non lo supporta).
+function updateIconBadge() {
+  if (!('setAppBadge' in navigator) || !standalone()) return;
+  if (window.Notification && Notification.permission !== 'granted') return;
+  const tot = Object.values(S.counts).reduce((a, b) => a + (b || 0), 0);
+  (tot ? navigator.setAppBadge(tot) : navigator.clearAppBadge()).catch(() => {});
+}
+
+// Nella pagina iniziale: tiene d'occhio anche gli altri viaggi per mostrare il numero di novità.
+function watchHome() {
+  S.homeUnsub.forEach((f) => f()); S.homeUnsub = [];
+  local.trips.forEach((t) => {
+    const data = S.homeData[t.id] = S.homeData[t.id] || {};
+    ALL_COLLS.forEach((c) => {
+      S.homeUnsub.push(S.db.watchColl(t.id, c, (items, meta) => {
+        initKnown(t.id, c, items, meta);
+        data[c] = items;
+        S.counts[t.id] = countNov(novelties(t.id, data, t.me, t.meName));
+        updateIconBadge();
+        if (S.view === 'home') render();
+      }));
+    });
+  });
+}
+function unwatchHome() { S.homeUnsub.forEach((f) => f()); S.homeUnsub = []; }
+
+// ---------- messaggi pronti per WhatsApp ----------
+const tripLink = () => `${location.origin}${location.pathname}?t=${S.tripId}`;
+const waOpen = (text) => window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+const namesList = (ids) => {
+  if (ids.length === members().length) return 'tutti';
+  const n = ids.map(nameOf);
+  return n.length > 1 ? `${n.slice(0, -1).join(', ')} e ${n[n.length - 1]}` : n[0] || '';
+};
+function expenseMsg(exp, edited) {
+  const who = myName();
+  if (exp.kind === 'rimborso') {
+    return `↔️ ${who} ha ${edited ? 'modificato un rimborso' : 'registrato un rimborso'}: ${nameOf(exp.payer)} ha dato ${fmt(exp.total, exp.currency)} a ${nameOf(exp.lines?.[0]?.users?.[0])}.\n👉 ${tripLink()}`;
+  }
+  const eur = exp.currency === 'MAD' ? ` (${fmt(toEur(exp.total, 'MAD', rate()))})` : '';
+  const lines = exp.lines.length > 1
+    ? `\n${exp.lines.map((l) => `• ${fmt(l.amount, exp.currency)} per ${namesList(l.users)}`).join('\n')}`
+    : ` · divisa per ${namesList(exp.lines[0]?.users || [])}`;
+  const bal = balances(S.expenses.filter((e) => e.id !== exp.id).concat(exp), members(), rate());
+  const saldi = members().map((m) => `${m.name} ${bal[m.id]?.net ? fmtSigned(bal[m.id].net) : '0'}`).join(', ');
+  return `💶 ${who} ha ${edited ? 'modificato' : 'aggiunto'} una spesa: ${exp.description || catOf(exp.category)[2]} ${fmt(exp.total, exp.currency)}${eur}, pagata da ${nameOf(exp.payer)}${lines}\n⚖️ Saldi: ${saldi}\n👉 ${tripLink()}`;
+}
+function stageMsg(s, edited) {
+  const k = stageKm(s);
+  const sleep = SLEEP.find((x) => x[0] === s.sleep);
+  const bits = [dayLabel(s.date), k ? `${k} km` : '', s.sleep && sleep ? `si dorme: ${sleep[1]}` : ''].filter(Boolean).join(', ');
+  return `🏍️ ${myName()} ha ${edited ? 'modificato' : 'aggiunto'} ${s.status === 'prevista' ? 'una tappa prevista' : 'una tappa'}: ${s.from || '?'} → ${s.to || '?'}${bits ? ` (${bits})` : ''}\n👉 ${tripLink()}`;
+}
+const updateMsg = () => `🔄 C'è una nuova versione dell'app Viaggi in Moto. Aprila con internet e tocca "Nuova versione disponibile".\n👉 ${location.origin}${location.pathname}`;
+
 // ---------- rendering ----------
 function render() {
   const app = $('#app');
   if (S.view === 'home') app.innerHTML = viewHome();
   else if (S.view === 'create') app.innerHTML = viewCreate();
   else if (S.view === 'join') app.innerHTML = viewJoin();
-  else if (S.view === 'trip') app.innerHTML = S.trip ? viewTrip() : '<div class="center muted">Apro il viaggio…</div>';
+  else if (S.view === 'trip') { S.nov = refreshNovelties(); app.innerHTML = S.trip ? viewTrip() : '<div class="center muted">Apro il viaggio…</div>'; }
   // Se un modulo è aperto non lo ridisegniamo: chi sta scrivendo non perde il cursore.
   if (!S.modal || !$('#modal')) renderModal();
   else if (S.modal === 'conv' && !document.activeElement?.matches?.('input')) renderModal();
@@ -213,13 +343,19 @@ function renderSync() {
 function viewHome() {
   const list = local.trips.map((t) => `
     <button class="card row" data-a="open" data-id="${t.id}">
-      <div><div class="title">${esc(t.name)}</div><div class="muted small">Tu sei: ${esc(t.meName || '')}${(() => { const c = countdown(t.startDate); return c && /giorn/.test(c.unit) && !/viaggio/.test(c.unit) ? ` · 🏁 tra ${c.big} ${c.big === '1' ? 'giorno' : 'giorni'}` : ''; })()}</div></div>
+      <div><div class="title">${esc(t.name)}${S.counts[t.id] ? ` <span class="badge">${S.counts[t.id]}</span>` : ''}</div><div class="muted small">${S.counts[t.id] ? `<b class="acc">${S.counts[t.id] === 1 ? '1 novità' : `${S.counts[t.id]} novità`}</b> · ` : ''}Tu sei: ${esc(t.meName || '')}${(() => { const c = countdown(t.startDate); return c && /giorn/.test(c.unit) && !/viaggio/.test(c.unit) ? ` · 🏁 tra ${c.big} ${c.big === '1' ? 'giorno' : 'giorni'}` : ''; })()}</div></div>
       <span class="chev">›</span>
     </button>`).join('');
   return `
     <header class="top"><h1>Viaggi in Moto</h1></header>
     <main class="pad">
       ${installCard(false)}
+      ${S.justUpdated && local.trips.some((t) => t.owner) ? `<div class="card install"><b>✅ App aggiornata</b> <span class="muted small">(versione ${esc(window.APP_VERSION)})</span>
+        <p class="small">Vuoi avvisare il gruppo che c'è la nuova versione?</p>
+        <div class="row gap"><button class="btn wa" data-a="wa-update">📤 Avvisa su WhatsApp</button><button class="btn ghost" data-a="hide-updated">No</button></div></div>` : ''}
+      ${isIOS && standalone() && 'setAppBadge' in navigator && window.Notification && Notification.permission === 'default' && !local.badgeAsked ? `<div class="card install"><b>🔢 Numero delle novità sull'icona</b>
+        <p class="small">Vuoi vedere sull'icona dell'app quante novità ci sono? L'iPhone ti chiederà il permesso.</p>
+        <div class="row gap"><button class="btn" data-a="badge-yes">Sì, attiva</button><button class="btn ghost" data-a="badge-no">No</button></div></div>` : ''}
       ${list ? `<h2>I tuoi viaggi</h2>${list}` : '<p class="muted">Nessun viaggio ancora. Se ti hanno mandato un invito, tocca "Incolla invito".</p>'}
       <div class="stack">
         <button class="btn ${list ? 'ghost' : ''}" data-a="paste-invite">📋 Incolla invito</button>
@@ -285,7 +421,11 @@ function viewTrip() {
       <button class="hbtn" data-a="conv" aria-label="Convertitore">💱</button>
     </header>
     <main class="pad with-nav">${body}</main>
-    <nav class="nav">${tabs.map(([k, i, l]) => `<button class="${S.tab === k ? 'on' : ''}" data-a="tab" data-tab="${k}"><span>${i}</span>${l}</button>`).join('')}</nav>`;
+    <nav class="nav">${tabs.map(([k, i, l]) => {
+      const n = S.nov?.[k]?.length || 0;
+      const dot = k === 'saldi' && S.tab !== 'saldi' && balChanged();
+      return `<button class="${S.tab === k ? 'on' : ''}" data-a="tab" data-tab="${k}"><span>${i}${n ? `<i class="nbadge">${n}</i>` : dot ? '<i class="nbadge dot"></i>' : ''}</span>${l}</button>`;
+    }).join('')}</nav>`;
 }
 
 // ---------- scheda Spese ----------
@@ -306,14 +446,14 @@ function tabSpese() {
     const head = e.date !== lastDay ? `<div class="day">${dayLabel(e.date)}</div>` : '';
     lastDay = e.date;
     if (e.kind === 'rimborso') {
-      return `${head}<button class="card" data-a="edit-exp" data-id="${e.id}">
+      return `${head}<button class="card${hlCls('expenses', e.id)}" data-a="edit-exp" data-id="${e.id}">${hlTag('expenses', e.id)}
         <div class="row"><div class="title">↔️ Rimborso</div><div class="amt">${fmt(e.total, e.currency)}</div></div>
         <div class="muted small">${esc(nameOf(e.payer))} ha dato a ${esc(nameOf(e.lines?.[0]?.users?.[0]))}${e._pending ? ' · ⏳' : ''}</div>
       </button>`;
     }
     const [, icon] = catOf(e.category);
     const personal = Object.keys(eff.net).every((k) => !eff.net[k]);
-    return `${head}<button class="card" data-a="edit-exp" data-id="${e.id}">
+    return `${head}<button class="card${hlCls('expenses', e.id)}" data-a="edit-exp" data-id="${e.id}">${hlTag('expenses', e.id)}
       <div class="row"><div class="title">${icon} ${esc(e.description || catOf(e.category)[2])}</div>
         <div class="amt">${fmt(e.total, e.currency)}${e.currency === 'MAD' ? `<div class="muted small">${fmt(eff.totalEur)}</div>` : ''}</div></div>
       <div class="muted small">Pagato da ${esc(nameOf(e.payer))}${personal ? ' · spesa personale' : ''}${(e.lines || []).length > 1 ? ` · ${e.lines.length} righe` : ''}${e._pending ? ' · ⏳ da inviare' : ''}</div>
@@ -329,6 +469,8 @@ function tabSpese() {
 }
 
 // ---------- scheda Saldi ----------
+const myNet = () => (balances(S.expenses, members(), rate())[me()]?.net || 0);
+const balChanged = () => { const prev = (local.balSeen || {})[S.tripId]; return prev !== undefined && prev !== myNet(); };
 function tabSaldi() {
   const bal = balances(S.expenses, members(), rate());
   const moves = settle(bal);
@@ -347,7 +489,15 @@ function tabSaldi() {
   const byCat = {};
   S.expenses.filter((e) => e.kind !== 'rimborso').forEach((e) => { byCat[e.category || 'altro'] = (byCat[e.category || 'altro'] || 0) + toEur(e.total, e.currency, rate()); });
   const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row line"><span>${catOf(k)[1]} ${catOf(k)[2]}</span><span>${fmt(v)}</span></div>`).join('');
+  const now = myNet();
+  if (S.balFrom === undefined) S.balFrom = (local.balSeen || {})[S.tripId];
+  local.balSeen = local.balSeen || {};
+  if (local.balSeen[S.tripId] !== now) { local.balSeen[S.tripId] = now; saveLocal(); }
+  const lbl = (v) => (v > 0 ? `ricevi ${fmt(v)}` : v < 0 ? `devi dare ${fmt(-v)}` : 'sei in pari');
+  const changedLine = S.balFrom !== undefined && S.balFrom !== now
+    ? `<div class="card is-new"><span class="tag-new">NOVITÀ</span><div>Dall'ultima volta il tuo saldo è cambiato: prima ${lbl(S.balFrom)}, <b>ora ${lbl(now)}</b>.</div></div>` : '';
   return `
+    ${changedLine}
     <h2>Situazione di ognuno</h2>${cards}
     <h2>Per pareggiare</h2>
     ${mv || '<p class="muted">Siete in pari 👍</p>'}
@@ -366,7 +516,7 @@ function tabTappe() {
     const k = stageKm(s);
     const dur = duration(s.depTime, s.arrTime);
     const sleep = SLEEP.find((x) => x[0] === s.sleep);
-    return `<div class="card ${s.status === 'prevista' ? 'planned' : ''}">
+    return `<div class="card ${s.status === 'prevista' ? 'planned' : ''}${hlCls('stages', s.id)}">${hlTag('stages', s.id)}
       <button class="plain" data-a="edit-stage" data-id="${s.id}">
         <div class="row"><div class="title">${esc(s.from || '?')} → ${esc(s.to || '?')}</div><div class="amt">${k ? `${k} km` : ''}</div></div>
         <div class="muted small">${s.status === 'prevista' ? '📝 Prevista · ' : ''}${dayLabel(s.date)}${s.depTime ? ` · ${s.depTime}` : ''}${s.arrTime ? `–${s.arrTime}` : ''}${dur ? ` (${dur})` : ''}${s.sleep ? ` · ${sleep ? sleep[1] : ''}` : ''}${s._pending ? ' · ⏳' : ''}</div>
@@ -394,7 +544,7 @@ function gpxSection() {
     <h2>File GPX</h2>
     <label class="btn ghost">📁 Carica un file GPX<input type="file" id="gpxFile" hidden></label>
     ${S.msg && S.tab === 'tappe' ? `<p class="err">${esc(S.msg)}</p>` : ''}
-    ${items.map((g) => `<div class="card">
+    ${items.map((g) => `<div class="card${hlCls('gpx', g.id)}">${hlTag('gpx', g.id)}
       <div class="row"><div class="title">🗺️ ${esc(g.name)}</div><div class="amt">${g.km ? `${g.km} km` : ''}</div></div>
       <div class="muted small">${g.points || 0} punti${g.wpts ? ` · ${g.wpts} ${g.wpts === 1 ? 'sosta' : 'soste'}` : ''}${g.simplified ? ' · alleggerito' : ''} · caricato da ${esc(g.uploadedBy || '?')}${g._pending ? ' · ⏳' : ''}</div>
       <div class="row gap"><button class="pill" data-a="gpx-dl" data-id="${g.id}">⬇️ Scarica / apri</button><button class="pill" data-a="gpx-del" data-id="${g.id}">Elimina</button></div>
@@ -434,9 +584,11 @@ async function uploadGpx(file) {
   }
   S.db.saveItem(S.tripId, 'gpx', {
     id: rid(16), name: file.name.replace(/\.gpx$/i, ''), text: out, km: Math.round(km), points: pts.length, wpts, simplified,
-    uploadedBy: myName(), createdAt: Date.now(),
+    uploadedBy: myName(), uploadedById: me(), createdAt: Date.now(),
   });
   render();
+  S.form = { title: '✅ File GPX caricato', msg: `🗺️ ${myName()} ha caricato il file GPX "${file.name.replace(/\.gpx$/i, '')}"${km ? ` (${Math.round(km)} km)` : ''}: lo trovate in Tappe.\n👉 ${tripLink()}` };
+  S.modal = 'share'; renderModal();
 }
 
 // ---------- scheda Bacheca ----------
@@ -450,7 +602,7 @@ function tabBacheca() {
       <textarea data-p="1" rows="3" placeholder="Scrivi un aggiornamento: traghetto prenotato, campeggio confermato, link utili…">${esc(S.postDraft)}</textarea>
       <button class="btn" data-a="post-send">Pubblica</button>
     </div>
-    ${posts.map((p) => `<div class="card">
+    ${posts.map((p) => `<div class="card${hlCls('posts', p.id)}">${hlTag('posts', p.id)}
       <div class="row"><b>${esc(p.author)}</b><span class="muted small">${when(p.createdAt)}${p._pending ? ' · ⏳' : ''}</span></div>
       <div class="post">${linkify(p.text)}</div>
       ${p.author === myName() ? `<button class="link small" data-a="post-del" data-id="${p.id}">Elimina</button>` : ''}
@@ -483,7 +635,7 @@ function tabViaggio() {
     <div class="card">
       ${members().map((m) => `<div class="line"><div class="row gap"><input data-member="${m.id}" value="${esc(m.name)}">
         ${m.id === me() ? '<span class="pill on">Tu</span>' : `<button class="pill" data-a="i-am" data-id="${m.id}">Sono io</button>`}</div>
-        ${presenceLine(m.id)}</div>`).join('')}
+        ${presenceLine(m.id)}${S.hl[`presence:${m.id}`] ? '<span class="tag-new">🆕 È APPENA ENTRATO</span>' : ''}</div>`).join('')}
       <button class="link" data-a="add-member">＋ aggiungi partecipante</button>
     </div>
     <h2>Dati</h2>
@@ -497,7 +649,8 @@ function tabViaggio() {
       <button class="btn ghost" data-a="forget">Togli dalla mia lista</button>
       ${isOwner() ? '<button class="btn danger" data-a="ask-del-trip">🗑️ Elimina viaggio per tutti</button><p class="small muted">Questo pulsante lo vedi solo tu, che hai creato il viaggio.</p>' : ''}
     </div>
-    <p class="muted small center">Versione ${window.APP_VERSION || ''}</p>`;
+    <p class="muted small center">Versione ${window.APP_VERSION || ''}</p>
+    ${isOwner() ? '<button class="btn ghost" data-a="wa-update">📤 Avvisa il gruppo che c\'è una nuova versione</button>' : ''}`;
 }
 
 // ---------- modali (form) ----------
@@ -506,7 +659,7 @@ function renderModal() {
   if (!S.modal) { if (el) el.remove(); document.body.classList.remove('lock'); return; }
   if (!el) { el = document.createElement('div'); el.id = 'modal'; document.body.appendChild(el); }
   document.body.classList.add('lock');
-  el.innerHTML = { expense: modalExpense, transfer: modalTransfer, stage: modalStage, saved: modalSaved, deltrip: modalDelTrip, conv: modalConv }[S.modal]();
+  el.innerHTML = { expense: modalExpense, transfer: modalTransfer, stage: modalStage, saved: modalSaved, deltrip: modalDelTrip, conv: modalConv, share: modalShare }[S.modal]();
   if (S.modal === 'expense') updatePreview();
 }
 
@@ -548,12 +701,12 @@ function modalExpense() {
         ${memberPicker(f.lines[0].users, 'line-user', 'data-l="0"')}
       </div>
       ${extra.map((l, k) => `<div class="card line-card">
-        <div class="row gap"><label class="grow">Importo a parte<input data-line="${k + 1}" inputmode="decimal" value="${esc(l.amountStr ?? centsToInput(l.amount))}" placeholder="es. 20,00 di birre"></label>
+        <div class="row gap"><label class="grow">Importo a parte<input data-line="${k + 1}" inputmode="decimal" value="${esc(l.amountStr ?? centsToInput(l.amount))}" placeholder="es. 20,00"></label>
           <button class="pill" data-a="line-del" data-l="${k + 1}">Togli</button></div>
         <div class="muted small">Solo per:</div>
         ${memberPicker(l.users, 'line-user', `data-l="${k + 1}"`)}
       </div>`).join('')}
-      <button class="link" data-a="line-add">＋ Aggiungi una parte da dividere diversamente (es. birre)</button>
+      <button class="link" data-a="line-add">＋ Aggiungi una parte della spesa da dividere diversamente</button>
       <div id="preview" class="card preview"></div>
       <p id="experr" class="err"></p>
       ${f.id ? '<button class="btn danger" data-a="del-exp">Elimina spesa</button>' : ''}
@@ -689,6 +842,15 @@ function modalDelTrip() {
   </main></div>`;
 }
 
+function modalShare() {
+  return `<div class="sheet small-sheet"><main class="pad">
+    <h2>${esc(S.form.title)}</h2>
+    <div class="card small waprev">${linkify(S.form.msg)}</div>
+    <button class="btn wa" data-a="wa-send">📤 Avvisa il gruppo su WhatsApp</button>
+    <button class="btn ghost" data-a="close">OK</button>
+  </main></div>`;
+}
+
 function modalSaved() {
   const { exp } = S.form;
   const eff = expenseEffect(exp, rate());
@@ -707,7 +869,8 @@ function modalSaved() {
         ${rows}
       </div>
       <p class="muted small">+ deve ricevere · − deve dare</p>
-      <button class="btn" data-a="close">OK</button>
+      <button class="btn wa" data-a="wa-send">📤 Avvisa il gruppo su WhatsApp</button>
+      <button class="btn ghost" data-a="close">OK</button>
     </main></div>`;
 }
 
@@ -759,7 +922,7 @@ async function onClick(ev) {
   const f = S.form;
   switch (a) {
     case 'reload': location.reload(); break;
-    case 'home': S.view = 'home'; S.form = null; S.msg = ''; S.unsub.forEach((x) => x()); S.unsub = []; local.current = null; saveLocal(); render(); break;
+    case 'home': S.view = 'home'; S.form = null; S.msg = ''; S.unsub.forEach((x) => x()); S.unsub = []; local.current = null; saveLocal(); watchHome(); render(); break;
     case 'open': openTrip(id); render(); break;
     case 'go-create': S.view = 'create'; S.form = null; S.msg = ''; render(); break;
     case 'go-join': S.view = 'join'; S.joinTrip = null; S.joinCode = ''; S.msg = ''; render(); break;
@@ -784,7 +947,7 @@ async function onClick(ev) {
       local.trips.push({ id: S.joinCode, name: t.name, me: id, meName: m.name }); saveLocal();
       S.joinTrip = null; S.tab = 'spese'; openTrip(S.joinCode); render(); break;
     }
-    case 'tab': S.tab = b.dataset.tab; render(); window.scrollTo(0, 0); break;
+    case 'tab': S.tab = b.dataset.tab; S.hl = {}; S.balFrom = undefined; render(); window.scrollTo(0, 0); break;
     case 'close': S.modal = null; S.form = null; renderModal(); break;
 
     // spese
@@ -821,10 +984,11 @@ async function onClick(ev) {
         id: f.id || rid(16), kind: 'spesa', description: f.description.trim(), date: f.date, category: f.category,
         currency: f.currency, total, payer: f.payer, lines: lines.filter((l) => l.amount > 0).map((l) => ({ amount: l.amount, users: l.users })),
         createdAt: f.createdAt || Date.now(), createdBy: f.createdBy || myName(), updatedBy: myName(), updatedAt: Date.now(),
+        createdById: f.createdById || me(), updatedById: me(),
       };
       S.db.saveItem(S.tripId, 'expenses', exp);
       if (S.trip.lastCurrency !== f.currency) S.db.updateTrip(S.tripId, { lastCurrency: f.currency });
-      S.form = { exp }; S.modal = 'saved'; renderModal(); break;
+      S.form = { exp, msg: expenseMsg(exp, !!f.id) }; S.modal = 'saved'; renderModal(); break;
     }
     case 'save-transfer': {
       const total = toCents(f.total);
@@ -833,9 +997,10 @@ async function onClick(ev) {
       const exp = {
         id: f.id || rid(16), kind: 'rimborso', date: f.date, currency: f.currency, total, payer: f.payer,
         lines: [{ amount: total, users: [f.to] }], createdAt: f.createdAt || Date.now(), createdBy: f.createdBy || myName(), updatedBy: myName(), updatedAt: Date.now(),
+        createdById: f.createdById || me(), updatedById: me(),
       };
       S.db.saveItem(S.tripId, 'expenses', exp);
-      S.form = { exp }; S.modal = 'saved'; renderModal(); break;
+      S.form = { exp, msg: expenseMsg(exp, !!f.id) }; S.modal = 'saved'; renderModal(); break;
     }
     case 'del-exp':
       if (confirm('Eliminare definitivamente?')) { S.db.deleteItem(S.tripId, 'expenses', f.id); S.modal = null; S.form = null; renderModal(); }
@@ -851,9 +1016,10 @@ async function onClick(ev) {
     case 'edit-stage': S.form = { ...S.stages.find((x) => x.id === id) }; S.modal = 'stage'; renderModal(); break;
     case 'stage-status': f.status = b.dataset.v; renderModal(); break;
     case 'save-stage': {
-      const s = { ...f, id: f.id || rid(16), updatedBy: myName(), updatedAt: Date.now(), createdBy: f.createdBy || myName() };
+      const s = { ...f, id: f.id || rid(16), updatedBy: myName(), updatedAt: Date.now(), createdBy: f.createdBy || myName(), createdAt: f.createdAt || Date.now(), createdById: f.createdById || me(), updatedById: me() };
       ['km', 'odoStart', 'odoEnd'].forEach((k) => { s[k] = s[k] ? Number(String(s[k]).replace(/\D/g, '')) || '' : ''; });
-      S.db.saveItem(S.tripId, 'stages', s); S.modal = null; S.form = null; renderModal(); break;
+      S.db.saveItem(S.tripId, 'stages', s);
+      S.form = { title: '✅ Tappa salvata', msg: stageMsg(s, !!f.id) }; S.modal = 'share'; renderModal(); break;
     }
     case 'del-stage':
       if (confirm('Eliminare la tappa?')) { S.db.deleteItem(S.tripId, 'stages', f.id); S.modal = null; S.form = null; renderModal(); }
@@ -889,7 +1055,7 @@ async function onClick(ev) {
     case 'forget':
       local.trips = local.trips.filter((x) => x.id !== S.tripId);
       S.unsub.forEach((x) => x()); S.unsub = []; local.current = null; saveLocal();
-      S.view = 'home'; S.modal = null; S.form = null; render(); break;
+      S.view = 'home'; S.modal = null; S.form = null; watchHome(); render(); break;
     case 'ask-del-trip': S.form = { confirm: '' }; S.modal = 'deltrip'; renderModal(); break;
     case 'del-trip': {
       if ((f.confirm || '').trim().toLowerCase() !== S.trip.name.trim().toLowerCase()) { $('#experr').textContent = 'Il nome non corrisponde.'; return; }
@@ -903,12 +1069,18 @@ async function onClick(ev) {
     case 'post-send': {
       const text = S.postDraft.trim();
       if (!text) return;
-      S.db.saveItem(S.tripId, 'posts', { id: rid(16), text, author: myName(), createdAt: Date.now() });
-      S.postDraft = ''; render(); break;
+      S.db.saveItem(S.tripId, 'posts', { id: rid(16), text, author: myName(), authorId: me(), createdAt: Date.now() });
+      S.postDraft = ''; render();
+      S.form = { title: '✅ Messaggio pubblicato', msg: `📌 ${myName()} ha scritto in bacheca: "${text}"\n👉 ${tripLink()}` }; S.modal = 'share'; renderModal(); break;
     }
     case 'post-del': if (confirm('Eliminare il messaggio?')) S.db.deleteItem(S.tripId, 'posts', id); break;
     case 'gpx-dl': { const g = S.gpx.find((x) => x.id === id); download(`${g.name}.gpx`, g.text, 'application/gpx+xml'); break; }
     case 'gpx-del': if (confirm('Eliminare il file GPX per tutti?')) S.db.deleteItem(S.tripId, 'gpx', id); break;
+    case 'wa-send': waOpen(f.msg); break;
+    case 'wa-update': waOpen(updateMsg()); S.justUpdated = false; render(); break;
+    case 'hide-updated': S.justUpdated = false; render(); break;
+    case 'badge-yes': local.badgeAsked = true; saveLocal(); try { await Notification.requestPermission(); } catch { /* niente */ } updateIconBadge(); render(); break;
+    case 'badge-no': local.badgeAsked = true; saveLocal(); render(); break;
     case 'install':
       if (installEvt) { installEvt.prompt(); installEvt.userChoice.finally(() => { installEvt = null; render(); }); }
       break;

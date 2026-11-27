@@ -74,7 +74,7 @@ export const db = {
       });
       pending.set(`${tripId}:${name}`, n);
       reportSync();
-      cb(items);
+      cb(items, { fromCache: s.metadata.fromCache });
     }, (e) => console.error(e));
   },
 

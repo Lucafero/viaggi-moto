@@ -19,7 +19,7 @@ export const db = {
   watchColl(tripId, name, cb) {
     const f = () => {
       const c = (data.trips[tripId]?._c || {})[name] || {};
-      cb(Object.entries(c).map(([id, v]) => ({ ...v, id, _pending: false })));
+      cb(Object.entries(c).map(([id, v]) => ({ ...v, id, _pending: false })), { fromCache: false });
     };
     subs.add(f); f(); return () => subs.delete(f);
   },
