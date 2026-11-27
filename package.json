@@ -11,8 +11,7 @@
   "license": "ISC",
   "dependencies": {
     "esbuild": "^0.28.2",
-    "firebase": "^13.4.0",
-    "qrcode-generator": "^2.0.4"
+    "firebase": "^13.4.0"
   },
   "type": "module"
 }

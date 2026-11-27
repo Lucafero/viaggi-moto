@@ -111,7 +111,7 @@ input.conv{font-size:26px;font-weight:700;padding:14px}
 .nbadge{position:absolute;top:-4px;right:-12px;min-width:18px;height:18px;line-height:18px;font-size:11px;font-style:normal;font-weight:800;color:#fff;background:#d63b2a;border-radius:999px;padding:0 5px;filter:none}
 .nbadge.dot{min-width:10px;width:10px;height:10px;padding:0;right:-6px;top:-2px}
 .nav button span{filter:none!important}
-.btn.wa{background:#25D366;color:#fff}
+.btn.wa{background:#25D366;color:#fff;display:flex;align-items:center;justify-content:center;gap:8px}.wa-ico{flex:none}
 .waprev{white-space:normal;word-break:break-word}
 #update{position:fixed;left:12px;right:12px;bottom:calc(80px + var(--safe-b));z-index:30;background:var(--ink);color:var(--bg);padding:12px 14px;border-radius:12px;display:none;text-align:center;font-weight:600}
 </style>
@@ -119,8 +119,8 @@ input.conv{font-size:26px;font-weight:700;padding:14px}
 <body>
 <div id="app"></div>
 <button id="update">🔄 Nuova versione disponibile · tocca per aggiornare</button>
-<script>window.APP_VERSION = '202611271443';</script>
-<script type="module" src="app.js?v=202611271443"></script>
+<script>window.APP_VERSION = '202611271452';</script>
+<script type="module" src="app.js?v=202611271452"></script>
 <script>
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').then(function (reg) {
