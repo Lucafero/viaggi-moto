@@ -1,3 +1,4 @@
+import qrcode from 'qrcode-generator';
 import {
   toCents, parseNum, fmt, fmtSigned, expenseEffect, balances, settle, stageKm, duration, toEur,
 } from './calc.js';
@@ -44,6 +45,51 @@ const countdownHtml = (t) => {
   const c = countdown(t?.startDate, t?.startTime);
   return c ? `<div class="countdown"><div class="cd-big">${c.big}</div><div><div class="cd-unit">${c.unit}</div><div class="small">${esc(c.sub)}</div></div></div>` : '';
 };
+
+// ---------- installazione facile ----------
+const UA = navigator.userAgent || '';
+const isIOS = /iPhone|iPad|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isInApp = /FBAN|FBAV|Instagram|Line\/|Snapchat|TikTok/i.test(UA);
+const standalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; render(); });
+window.addEventListener('appinstalled', () => { installEvt = null; render(); });
+
+const SHARE_ICON = '<svg class="ico" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><rect x="5" y="10" width="14" height="11" rx="2"/></svg>';
+
+function installCard(invite) {
+  if (standalone() || local.hideInstall) return '';
+  if (isInApp) {
+    return `<div class="card install"><b>📲 Per installare l'app</b>
+      <p>Tocca <b>⋯</b> o <b>⋮</b> in alto e scegli <b>"Apri nel browser"</b> (Safari o Chrome).</p></div>`;
+  }
+  if (isIOS) {
+    return `<div class="card install"><b>📲 Installa l'app sull'iPhone</b>
+      ${invite ? '<p>1. Tocca qui per <b>copiare l\'invito</b>, ti servirà tra poco:</p><button class="btn" data-a="copy-invite">📋 Copia l\'invito</button>' : ''}
+      <p>${invite ? '2' : '1'}. In basso tocca il pulsante <b>Condividi</b> ${SHARE_ICON}</p>
+      <p>${invite ? '3' : '2'}. Scorri e tocca <b>"Aggiungi alla schermata Home"</b>, poi <b>"Aggiungi"</b>.</p>
+      <p>${invite ? '4' : '3'}. Apri l'app dall'icona nuova${invite ? ' e tocca <b>"📋 Incolla invito"</b>' : ''}.</p>
+      <p class="small muted">Se non trovi "Condividi", apri questo link con <b>Safari</b>.</p>
+      <button class="link small" data-a="hide-install">Non ora</button>
+      <div class="arrow-down">⬇︎</div></div>`;
+  }
+  if (installEvt) {
+    return `<div class="card install"><b>📲 Metti l'app sul telefono</b>
+      <p>Un tocco e trovi l'icona sulla schermata Home, come un'app normale.</p>
+      <button class="btn" data-a="install">📲 Installa l'app</button>
+      ${invite ? '<p class="small muted">Puoi anche entrare subito nel viaggio qui sotto: lo ritrovi nell\'app.</p>' : ''}
+      <button class="link small" data-a="hide-install">Non ora</button></div>`;
+  }
+  return `<div class="card install"><b>📲 Metti l'app sul telefono</b>
+    <p>Tocca il menu <b>⋮</b> in alto a destra di Chrome e scegli <b>"Installa app"</b> o <b>"Aggiungi a schermata Home"</b>.</p>
+    <button class="link small" data-a="hide-install">Non ora</button></div>`;
+}
+
+function qrSvg(text) {
+  const q = qrcode(0, 'M');
+  q.addData(text); q.make();
+  return q.createSvgTag({ cellSize: 6, margin: 2, scalable: true });
+}
 
 // ---------- stato locale (sul telefono) ----------
 const LS = 'viaggi-moto';
@@ -173,8 +219,10 @@ function viewHome() {
   return `
     <header class="top"><h1>Viaggi in Moto</h1></header>
     <main class="pad">
-      ${list ? `<h2>I tuoi viaggi</h2>${list}` : '<p class="muted">Nessun viaggio ancora. Creane uno o entra con il codice che ti hanno mandato.</p>'}
+      ${installCard(false)}
+      ${list ? `<h2>I tuoi viaggi</h2>${list}` : '<p class="muted">Nessun viaggio ancora. Se ti hanno mandato un invito, tocca "Incolla invito".</p>'}
       <div class="stack">
+        <button class="btn ${list ? 'ghost' : ''}" data-a="paste-invite">📋 Incolla invito</button>
         <button class="btn" data-a="go-create">＋ Crea un viaggio</button>
         <button class="btn ghost" data-a="go-join">Entra con un codice</button>
         <label class="btn ghost">♻️ Ripristina da un backup<input type="file" id="restoreFile" hidden></label>
@@ -208,6 +256,7 @@ function viewJoin() {
   return `
     <header class="top"><button class="back" data-a="home">‹</button><h1>Entra in un viaggio</h1></header>
     <main class="pad">
+      ${installCard(true)}
       ${t ? `
         <h2>${esc(t.name)}</h2>
         <p>Chi sei?</p>
@@ -417,6 +466,8 @@ function tabViaggio() {
       <p class="small">Manda questo link a chi viaggia con te. Si apre l'app, sceglie il suo nome ed è dentro.</p>
       <div class="code">${esc(link)}</div>
       <div class="row gap"><button class="btn" data-a="share">📤 Condividi link</button><button class="btn ghost" data-a="copy">Copia</button></div>
+      <p class="small">Siete insieme? Fai inquadrare questo <b>QR code</b> con la fotocamera: si apre il browser, installa l'app ed entra in <b>${esc(S.trip.name)}</b>.</p>
+      <div class="qr">${qrSvg(link)}</div>
     </div>
     <h2>Impostazioni</h2>
     <div class="card">
@@ -858,6 +909,23 @@ async function onClick(ev) {
     case 'post-del': if (confirm('Eliminare il messaggio?')) S.db.deleteItem(S.tripId, 'posts', id); break;
     case 'gpx-dl': { const g = S.gpx.find((x) => x.id === id); download(`${g.name}.gpx`, g.text, 'application/gpx+xml'); break; }
     case 'gpx-del': if (confirm('Eliminare il file GPX per tutti?')) S.db.deleteItem(S.tripId, 'gpx', id); break;
+    case 'install':
+      if (installEvt) { installEvt.prompt(); installEvt.userChoice.finally(() => { installEvt = null; render(); }); }
+      break;
+    case 'hide-install': local.hideInstall = true; saveLocal(); render(); break;
+    case 'copy-invite': {
+      const link = `${location.origin}${location.pathname}?t=${S.joinCode}`;
+      navigator.clipboard?.writeText(link).then(() => { b.textContent = '✅ Invito copiato'; }, () => { b.textContent = 'Copia non riuscita: tienilo nel messaggio'; });
+      break;
+    }
+    case 'paste-invite': {
+      let txt = '';
+      try { txt = await navigator.clipboard.readText(); } catch { txt = ''; }
+      S.view = 'join'; S.joinTrip = null; S.msg = '';
+      if (/[?&]t=[A-Za-z0-9]{16,}/.test(txt) || /^[A-Za-z0-9]{16,}$/.test(txt.trim())) { S.joinCode = txt.trim(); lookupTrip(); }
+      else { S.joinCode = ''; S.msg = txt ? 'Negli appunti non c\'è un invito. Copia il link che ti hanno mandato e riprova, oppure incollalo qui sotto.' : ''; render(); }
+      break;
+    }
     case 'conv': S.modal = 'conv'; S.form = {}; renderModal(); setTimeout(() => $('[data-cv=mad]')?.focus(), 50); break;
     case 'rate-fetch': fetchRate(); break;
     case 'export-csv': download(`${S.trip.name}-spese.csv`, expensesCsv(), 'text/csv'); break;
