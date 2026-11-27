@@ -142,22 +142,35 @@ export async function start(db) {
 function openTrip(id) {
   S.unsub.forEach((f) => f());
   unwatchHome();
+  ratesFrozen = false;
   S.tripId = id; S.view = 'trip'; S.trip = null; S.expenses = []; S.stages = []; S.posts = []; S.gpx = []; S.presence = []; S.presenceDone = false; S.hl = {}; S.balFrom = undefined;
   local.current = id; saveLocal();
   S.unsub = [
     S.db.watchTrip(id, (t) => {
       S.trip = t;
+      freezeOldRates();
       const lt = local.trips.find((x) => x.id === id);
       const own = !!lt && lt.me === (t.ownerId || t.members?.[0]?.id);
       if (lt && (lt.name !== t.name || lt.startDate !== t.startDate || lt.owner !== own)) { lt.name = t.name; lt.startDate = t.startDate || ''; lt.owner = own; saveLocal(); }
       render();
     }),
-    S.db.watchColl(id, 'expenses', (items, meta) => { initKnown(id, 'expenses', items, meta); S.expenses = items; render(); }),
+    S.db.watchColl(id, 'expenses', (items, meta) => { initKnown(id, 'expenses', items, meta); S.expenses = items; freezeOldRates(); render(); }),
     S.db.watchColl(id, 'stages', (items, meta) => { initKnown(id, 'stages', items, meta); S.stages = items; render(); }),
     S.db.watchColl(id, 'posts', (items, meta) => { initKnown(id, 'posts', items, meta); S.posts = items; render(); }),
     S.db.watchColl(id, 'gpx', (items, meta) => { initKnown(id, 'gpx', items, meta); S.gpx = items; render(); }),
     S.db.watchColl(id, 'presence', (items, meta) => { initKnown(id, 'presence', items, meta); S.presence = items; markPresence(); render(); }),
   ];
+}
+
+// Le spese in dirham inserite prima di questa versione non avevano il cambio salvato:
+// le "blocchiamo" una volta con il cambio attuale del viaggio (lo fa solo il creatore).
+let ratesFrozen = false;
+function freezeOldRates() {
+  if (ratesFrozen || !S.trip || !isOwner()) return;
+  const old = S.expenses.filter((e) => e.currency === 'MAD' && !e.rate);
+  if (!old.length) return;
+  ratesFrozen = true;
+  old.forEach((e) => S.db.saveItem(S.tripId, 'expenses', { ...e, rate: rate(), rateAt: Date.now() }));
 }
 
 // Segna che questo partecipante ha aperto l'app (una volta per apertura).
@@ -422,7 +435,7 @@ function effectChips(eff) {
 
 function tabSpese() {
   const exps = [...S.expenses].sort(sortExp);
-  const tot = exps.filter((e) => e.kind !== 'rimborso').reduce((s, e) => s + toEur(e.total, e.currency, rate()), 0);
+  const tot = exps.filter((e) => e.kind !== 'rimborso').reduce((s, e) => s + toEur(e.total, e.currency, e.rate || rate()), 0);
   let lastDay = null;
   const list = exps.map((e) => {
     const eff = expenseEffect(e, rate());
@@ -470,7 +483,7 @@ function tabSaldi() {
       <div><b>${esc(nameOf(x.from))}</b> dà <b>${fmt(x.amount)}</b> a <b>${esc(nameOf(x.to))}</b></div>
       <button class="pill" data-a="settle" data-i="${i}">Fatto</button></div>`).join('');
   const byCat = {};
-  S.expenses.filter((e) => e.kind !== 'rimborso').forEach((e) => { byCat[e.category || 'altro'] = (byCat[e.category || 'altro'] || 0) + toEur(e.total, e.currency, rate()); });
+  S.expenses.filter((e) => e.kind !== 'rimborso').forEach((e) => { byCat[e.category || 'altro'] = (byCat[e.category || 'altro'] || 0) + toEur(e.total, e.currency, e.rate || rate()); });
   const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<div class="row line"><span>${catOf(k)[1]} ${catOf(k)[2]}</span><span>${fmt(v)}</span></div>`).join('');
   const now = myNet();
   if (S.balFrom === undefined) S.balFrom = (local.balSeen || {})[S.tripId];
@@ -605,7 +618,8 @@ function tabViaggio() {
     <h2>Impostazioni</h2>
     <div class="card">
       <label>Nome del viaggio<input data-t="name" value="${esc(S.trip.name)}"></label>
-      <label>Cambio: dirham per 1 euro<input data-t="rate" inputmode="decimal" value="${esc(String(S.trip.rate).replace('.', ','))}"></label>
+      <label>Cambio attuale: dirham per 1 euro<input data-t="rate" inputmode="decimal" value="${esc(String(S.trip.rate).replace('.', ','))}"></label>
+      <p class="small muted">Si aggiorna da solo da internet quando apri il convertitore o inserisci una spesa in dirham. Ogni spesa tiene il cambio del momento in cui è stata inserita.</p>
       <div class="row gap">
         <label class="grow">Data di partenza<input type="date" data-t="startDate" value="${esc(S.trip.startDate || '')}"></label>
         <label class="grow">Ora<input type="time" data-t="startTime" value="${esc(S.trip.startTime || '')}"></label>
@@ -717,12 +731,14 @@ function updatePreview() {
   const f = S.form;
   if (!f || S.modal !== 'expense') return;
   const { rest, lines, total } = resolveLines(f);
-  const r = $('#resto'); if (r) r.textContent = fmt(rest, f.currency);
+  const restEl = $('#resto'); if (restEl) restEl.textContent = fmt(rest, f.currency);
   const q = $('#eqv');
-  if (q) q.textContent = total ? (f.currency === 'MAD' ? `≈ ${fmt(toEur(total, 'MAD', rate()))} (1 € = ${fmtNum(rate())} DH)` : `≈ ${fmt(Math.round(total * rate()), 'MAD')}`) : '';
+  const r = f.rate || rate();
+  const note = f.rate ? `cambio salvato con la spesa${f.rateAt ? ` il ${new Date(f.rateAt).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}` : ''}` : rateFetching ? 'aggiorno il cambio…' : S.trip.rateUpdatedAt ? `cambio reale aggiornato ${seenLabel(S.trip.rateUpdatedAt)}` : 'cambio del viaggio';
+  if (q) q.textContent = total ? (f.currency === 'MAD' ? `≈ ${fmt(toEur(total, 'MAD', r))} (1 € = ${fmtNum(r)} DH, ${note})` : `≈ ${fmt(Math.round(total * r), 'MAD')}`) : '';
   const p = $('#preview'); if (!p) return;
   if (!total) { p.innerHTML = '<span class="muted small">Scrivi il totale per vedere la divisione.</span>'; return; }
-  const eff = expenseEffect({ total, currency: f.currency, payer: f.payer, lines }, rate());
+  const eff = expenseEffect({ total, currency: f.currency, payer: f.payer, lines, rate: f.rate }, rate());
   const rows = members().map((m) => {
     const u = eff.used[m.id] || 0, n = eff.net[m.id] || 0;
     return `<div class="row line"><span>${esc(m.name)}</span><span class="muted small">consuma ${fmt(u)}</span><span class="${n > 0 ? 'pos' : n < 0 ? 'neg' : ''}">${n ? fmtSigned(n) : '—'}</span></div>`;
@@ -772,7 +788,7 @@ const num = parseNum;
 const fmtNum = (v) => (Number.isFinite(v) ? v.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
 
 function modalConv() {
-  const upd = S.trip.rateUpdatedAt ? `Aggiornato ${seenLabel(S.trip.rateUpdatedAt)}${S.trip.rateBy ? ` da ${esc(S.trip.rateBy)}` : ''}` : 'Cambio inserito alla creazione del viaggio';
+  const upd = S.trip.rateUpdatedAt ? `Cambio reale aggiornato ${seenLabel(S.trip.rateUpdatedAt)}` : 'Cambio inserito alla creazione del viaggio';
   return `<div class="sheet small-sheet"><main class="pad">
     <div class="row"><h2>💱 Convertitore</h2><button class="back" data-a="close">✕</button></div>
     <label>Dirham (DH)<input class="conv" data-cv="mad" inputmode="decimal" placeholder="0,00" autocomplete="off"></label>
@@ -780,35 +796,57 @@ function modalConv() {
     <div class="card">
       <div class="row"><span>1 € = <b>${fmtNum(rate())} DH</b></span><span class="muted small">1 DH = ${(1 / rate()).toLocaleString('it-IT', { maximumFractionDigits: 3 })} €</span></div>
       <div class="muted small">${upd}</div>
-      <button class="btn ghost" data-a="rate-fetch">🔄 Aggiorna cambio di oggi (serve internet)</button>
-      <label>Oppure scrivilo a mano (es. quello del cambiavalute)<input data-t="rate" inputmode="decimal" value="${esc(String(rate()).replace('.', ','))}"></label>
-      <p id="rateMsg" class="small muted"></p>
+      <p id="rateMsg" class="small muted">${S.rateMsg || ''}</p>
     </div>
   </main></div>`;
 }
 
-async function fetchRate() {
-  const msg = (t) => { const e = $('#rateMsg'); if (e) e.textContent = t; };
-  msg('Cerco il cambio di oggi…');
+// Scarica il cambio reale da internet e lo salva nel viaggio (per tutti e tre).
+// maxAgeMin: se è stato aggiornato da poco non lo riscarica. Senza rete resta l'ultimo.
+let rateFetching = null;
+function fetchRate(maxAgeMin = 0) {
+  if (S.trip?.rateUpdatedAt && Date.now() - S.trip.rateUpdatedAt < maxAgeMin * 60000) return Promise.resolve(rate());
+  if (rateFetching) return rateFetching;
+  const msg = (t) => { S.rateMsg = t; const e = $('#rateMsg'); if (e) e.textContent = t; };
+  msg('Aggiorno il cambio da internet…');
   const sources = [
     ['https://open.er-api.com/v6/latest/EUR', (d) => d?.rates?.MAD],
     ['https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/eur.json', (d) => d?.eur?.mad],
     ['https://latest.currency-api.pages.dev/v1/currencies/eur.json', (d) => d?.eur?.mad],
   ];
-  for (const [url, pick] of sources) {
-    try {
-      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 8000);
-      const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); clearTimeout(tm);
-      const v = Number(pick(await r.json()));
-      if (v > 5 && v < 25) { // controllo di buon senso: 1 € vale circa 10-11 DH
-        const val = Math.round(v * 1000) / 1000;
-        S.db.updateTrip(S.tripId, { rate: val, rateUpdatedAt: Date.now(), rateBy: myName() });
-        msg(`Fatto: 1 € = ${fmtNum(val)} DH. Vale per tutti e tre.`);
-        return;
-      }
-    } catch (e) { /* provo la fonte successiva */ }
+  rateFetching = (async () => {
+    for (const [url, pick] of sources) {
+      try {
+        const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 8000);
+        const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); clearTimeout(tm);
+        const v = Number(pick(await r.json()));
+        if (v > 5 && v < 25) { // controllo di buon senso: 1 € vale circa 10-11 DH
+          const val = Math.round(v * 1000) / 1000;
+          S.trip = { ...S.trip, rate: val, rateUpdatedAt: Date.now() };
+          S.db.updateTrip(S.tripId, { rate: val, rateUpdatedAt: Date.now(), rateBy: myName() });
+          msg('');
+          return val;
+        }
+      } catch (e) { /* provo la fonte successiva */ }
+    }
+    msg(`Senza internet: uso l'ultimo cambio scaricato.`);
+    return rate();
+  })().finally(() => { rateFetching = null; afterRate(); });
+  return rateFetching;
+}
+// Dopo l'aggiornamento: ricalcola convertitore e anteprima della spesa aperti.
+function afterRate() {
+  if (S.modal === 'conv') {
+    const mad = $('[data-cv=mad]'), eur = $('[data-cv=eur]');
+    const madV = mad?.value, eurV = eur?.value, focus = document.activeElement?.dataset?.cv;
+    renderModal();
+    const m2 = $('[data-cv=mad]'), e2 = $('[data-cv=eur]');
+    if (m2) m2.value = madV || ''; if (e2) e2.value = eurV || '';
+    const src = focus === 'eur' ? e2 : m2;
+    if (src && src.value) src.dispatchEvent(new Event('input', { bubbles: true }));
+    if (focus) $(`[data-cv=${focus}]`)?.focus();
   }
-  msg('Non riesco a scaricare il cambio adesso. Resta valido quello salvato, oppure scrivilo a mano.');
+  if (S.modal === 'expense') updatePreview();
 }
 
 function modalDelTrip() {
@@ -932,7 +970,7 @@ async function onClick(ev) {
     case 'close': S.modal = null; S.form = null; renderModal(); break;
 
     // spese
-    case 'new-exp': S.form = newExpenseForm(); S.modal = 'expense'; renderModal(); break;
+    case 'new-exp': S.form = newExpenseForm(); S.modal = 'expense'; renderModal(); if (S.form.currency === 'MAD') fetchRate(60); break;
     case 'new-transfer': {
       const mv = settle(balances(S.expenses, members(), rate())).find((x) => x.from === me());
       S.form = { kind: 'rimborso', date: today(), currency: 'EUR', payer: me(), to: mv?.to || null, total: mv ? centsToInput(mv.amount) : '' };
@@ -947,7 +985,7 @@ async function onClick(ev) {
       }
       renderModal(); break;
     }
-    case 'cur': f.currency = b.dataset.c; renderModal(); break;
+    case 'cur': f.currency = b.dataset.c; renderModal(); if (f.currency === 'MAD' && !f.rate) fetchRate(60); break;
     case 'payer': f.payer = id; renderModal(); break;
     case 'to': f.to = id; renderModal(); break;
     case 'line-user': {
@@ -964,6 +1002,7 @@ async function onClick(ev) {
       const exp = {
         id: f.id || rid(16), kind: 'spesa', description: f.description.trim(), date: f.date, category: f.category,
         currency: f.currency, total, payer: f.payer, lines: lines.filter((l) => l.amount > 0).map((l) => ({ amount: l.amount, users: l.users })),
+        ...(f.currency === 'MAD' ? { rate: f.rate || rate(), rateAt: f.rateAt || Date.now() } : {}),
         createdAt: f.createdAt || Date.now(), createdBy: f.createdBy || myName(), updatedBy: myName(), updatedAt: Date.now(),
         createdById: f.createdById || me(), updatedById: me(),
       };
@@ -977,6 +1016,7 @@ async function onClick(ev) {
       if (err) { $('#experr').textContent = err; return; }
       const exp = {
         id: f.id || rid(16), kind: 'rimborso', date: f.date, currency: f.currency, total, payer: f.payer,
+        ...(f.currency === 'MAD' ? { rate: f.rate || rate(), rateAt: f.rateAt || Date.now() } : {}),
         lines: [{ amount: total, users: [f.to] }], createdAt: f.createdAt || Date.now(), createdBy: f.createdBy || myName(), updatedBy: myName(), updatedAt: Date.now(),
         createdById: f.createdById || me(), updatedById: me(),
       };
@@ -1079,8 +1119,7 @@ async function onClick(ev) {
       else { S.joinCode = ''; S.msg = txt ? 'Negli appunti non c\'è un invito. Copia il link che ti hanno mandato e riprova, oppure incollalo qui sotto.' : ''; render(); }
       break;
     }
-    case 'conv': S.modal = 'conv'; S.form = {}; renderModal(); setTimeout(() => $('[data-cv=mad]')?.focus(), 50); break;
-    case 'rate-fetch': fetchRate(); break;
+    case 'conv': S.modal = 'conv'; S.form = {}; S.rateMsg = ''; renderModal(); setTimeout(() => $('[data-cv=mad]')?.focus(), 50); fetchRate(10); break;
     case 'export-csv': download(`${S.trip.name}-spese.csv`, expensesCsv(), 'text/csv'); break;
     default: break;
   }

@@ -48,7 +48,8 @@ export function toEur(cents, currency, rate) {
 export function expenseEffect(exp, rate) {
   const paid = {}, used = {}, net = {};
   const add = (o, k, v) => { o[k] = (o[k] || 0) + v; };
-  const totalEur = toEur(exp.total || 0, exp.currency, rate);
+  // Ogni spesa usa il cambio salvato nel momento in cui è stata inserita (se c'è).
+  const totalEur = toEur(exp.total || 0, exp.currency, Number(exp.rate) > 0 ? Number(exp.rate) : rate);
   // Le righe vengono convertite in proporzione, così la somma resta uguale al totale in euro.
   const lines = (exp.lines || []).filter((l) => (l.users || []).length && l.amount);
   const sumLines = lines.reduce((s, l) => s + l.amount, 0);
